@@ -31,7 +31,6 @@ def load_settings(path="settings.json"):
         data = DEFAULT
         print("⚙️ Using default settings (settings.json not found)")
 
-    # Normalize break_slots to list of (start,end)
     breaks = []
     for b in data.get("break_slots", []):
         if isinstance(b, str) and "-" in b:
@@ -122,7 +121,6 @@ def build_slot_requests_for_division(df, div_fullname, settings):
                 continue
             dur_hours = settings["slot_durations"].get(kind, 1.0)
 
-            # Only create slots that exactly sum to hours, no extra
             full_slots = int(hours // dur_hours)
             remainder = hours % dur_hours
 
@@ -262,7 +260,7 @@ def schedule_globally(all_normals_per_div, all_baskets, settings, min_gap_minute
 
         placed = False
         days_to_try = days.copy()
-        random.shuffle(days_to_try)  # ensures all days get fair chance
+        random.shuffle(days_to_try)
         for day in days_to_try:
             for start_idx in range(0, len(interval_times) - n_intervals + 1):
                 if any(idx in break_indices for idx in range(start_idx, start_idx + n_intervals)):
@@ -309,7 +307,6 @@ def schedule_globally(all_normals_per_div, all_baskets, settings, min_gap_minute
                 placements[div][day].append((start_idx, n_intervals, slot["slot_label"], slot["kind"], slot))
                 mark_block(day, start_idx, n_intervals, busy_people, room)
 
-                # only schedule merged divisions if user provided them
                 for mdiv in slot.get("merge_with", []):
                     mdiv = mdiv.strip()
                     if not mdiv or mdiv not in placements:
@@ -325,7 +322,6 @@ def schedule_globally(all_normals_per_div, all_baskets, settings, min_gap_minute
         if not placed:
             unscheduled.append(f"{slot.get('code') or slot.get('slot_label')} ({slot.get('kind')}) in {div} not placed")
 
-    # ----- BASKETS (electives) -----
     for basket_label, members in all_baskets.items():
         if not members:
             continue
