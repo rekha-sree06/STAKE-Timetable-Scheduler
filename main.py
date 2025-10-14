@@ -11,9 +11,7 @@ from openpyxl.styles import PatternFill, Alignment, Font
 from openpyxl.utils import get_column_letter
 from openpyxl.cell import MergedCell
 
-# -------------------------
-# Settings loader
-# -------------------------
+
 def load_settings(path="settings.json"):
     DEFAULT = {
         "working_days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
@@ -50,9 +48,7 @@ def load_settings(path="settings.json"):
     print("-" * 60)
     return data
 
-# -------------------------
-# Time utilities
-# -------------------------
+
 def time_to_minutes(t):
     if isinstance(t, (int, float)):
         return int(t)
@@ -72,9 +68,7 @@ def gcd_list(nums):
         g = gcd(g, n)
     return g if g > 0 else 15
 
-# -------------------------
-# Input parsing helpers
-# -------------------------
+
 def parse_LTP_from_ltpsc(ltpsc):
     if pd.isna(ltpsc):
         return 0, 0, 0
@@ -102,12 +96,7 @@ def read_input_file(path):
     df.columns = [str(c).strip() for c in df.columns]
     return df
 
-# -------------------------
-# Build slot requests
-# -------------------------
-# -------------------------
-# Build slot requests (corrected)
-# -------------------------
+
 def build_slot_requests_for_division(df, div_fullname, settings):
     normals = []
     baskets = {}
@@ -192,9 +181,7 @@ def build_slot_requests_for_division(df, div_fullname, settings):
     return normals, baskets
 
 
-# -------------------------
-# Scheduling core
-# -------------------------
+
 def schedule_globally(all_normals_per_div, all_baskets, settings, min_gap_minutes):
     days = settings["working_days"]
     wh_start = time_to_minutes(settings["working_hours"][0])
@@ -401,31 +388,19 @@ def schedule_globally(all_normals_per_div, all_baskets, settings, min_gap_minute
 
     return placements, unscheduled, interval_times, base_interval, break_indices
 
-# ------------------------- Remaining helpers (merged-cell, Excel write, main) -------------------------
-# [The rest of your code stays unchanged: set_value_in_merged_region, safe_sheet_title, write_year_excel, main()]
-
 
 def set_value_in_merged_region(ws, row, col_start, col_end, value):
-    """
-    Safely set `value` into the top-left cell of the region (row, col_start..col_end).
-    We first unmerge any conflicting ranges, then merge desired region and write into top-left.
-    """
-    # ensure no overlapping merged ranges cause MergedCell issues
     unmerge_ranges_overlapping(ws, row, col_start, col_end)
 
-    # perform merge (if multi-col)
     if col_end > col_start:
         try:
             ws.merge_cells(start_row=row, start_column=col_start, end_row=row, end_column=col_end)
         except Exception:
-            # proceed even if merge fails
             pass
 
-    # write into top-left (this should be writable)
     try:
         ws.cell(row=row, column=col_start, value=value)
     except Exception:
-        # fallback: try to unmerge surrounding and write directly
         try:
             ws.unmerge_cells(start_row=row, start_column=col_start, end_row=row, end_column=col_end)
         except Exception:
@@ -448,9 +423,6 @@ def safe_sheet_title(raw, fallback_prefix="Sheet"):
     if len(s) > 31: s = s[:31]
     return s
 
-# -------------------------
-# Write Excel output
-# -------------------------
 def write_year_excel(year, half_tag, placements, interval_times, base_interval, break_indices, colors, course_info_per_div, settings, outdir="timetable_outputs"):
     os.makedirs(outdir, exist_ok=True)
     fname = os.path.join(outdir, f"Timetable_Year{year}_{half_tag}.xlsx")
@@ -484,24 +456,19 @@ def write_year_excel(year, half_tag, placements, interval_times, base_interval, 
             ws.append([day] + [""] * len(time_headers))
         first_day_row = header_row_idx + 1
 
-        # fill placements
         for r_idx, day in enumerate(days):
             placements_for_day = day_map.get(day, [])
             placements_for_day.sort(key=lambda x: x[0])
             for (start_idx, n_intervals, slot_label, kind, meta) in placements_for_day:
-                # label to display (slot_label should already include '-lec' etc.)
                 label = slot_label if slot_label else f"{meta.get('slot_base','')}-{kind}"
                 excel_row = first_day_row + r_idx
                 excel_col_start = 2 + start_idx
                 excel_col_end = 2 + start_idx + n_intervals - 1
 
-                # write label inside merged region safely (we unmerge overlapping ranges first)
                 set_value_in_merged_region(ws, excel_row, excel_col_start, excel_col_end, label)
 
-                # choose color by SLOT NAME (slot_base), not by slot_label (so lec/lab/tut same color)
                 slot_base = meta.get("slot_base") if isinstance(meta, dict) else None
                 if not slot_base:
-                    # fallback: derive from slot_label by removing -lec/-lab/-tut suffix if present
                     if isinstance(slot_label, str) and "-" in slot_label:
                         slot_base = "-".join(slot_label.split("-")[:-1])
                     else:
@@ -511,41 +478,33 @@ def write_year_excel(year, half_tag, placements, interval_times, base_interval, 
                 if not (isinstance(color_code, str) and len(color_code) in (6, 8) and all(ch in "0123456789ABCDEFabcdef" for ch in color_code)):
                     color_code = "DDDDDD"
 
-                # style each cell in region
                 for ccol in range(excel_col_start, excel_col_end + 1):
                     c = ws.cell(row=excel_row, column=ccol)
                     c.fill = PatternFill(start_color=color_code, end_color=color_code, fill_type="solid")
                     c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
                     c.font = Font(size=10, bold=True)
 
-        # Shade break columns
         for bi in sorted(break_indices):
             excel_col = 2 + bi
             for r in range(first_day_row, first_day_row + len(days)):
-                # ensure label placeholder doesn't get lost (we wrote in merged region)
                 try:
                     cell = ws.cell(row=r, column=excel_col)
                     cell.fill = PatternFill(start_color="EEEEEE", end_color="EEEEEE", fill_type="solid")
-                    # optionally label break cell with 'BREAK' if empty
                     if not cell.value:
                         cell.value = "BREAK"
                         cell.alignment = Alignment(horizontal="center", vertical="center")
                 except Exception:
                     pass
 
-        # set column widths
         ws.column_dimensions[get_column_letter(1)].width = 14
         for ci in range(2, 2 + len(time_headers)):
             ws.column_dimensions[get_column_letter(ci)].width = 18
 
-        # append reference table
-        # append reference table
         ws.append([])
         ws.append(["Reference Table"])
         ws.append(["Slot Name", "Course Code", "Course Title", "Faculty", "L-T-P-S-C", "ROOM.NO", "LAB ROOM.NO"])
         seen = set()
         infos = course_info_per_div.get(div, [])
-        # group by slot_base to keep only one row per slot name
         slot_base_map = {}
         for info in infos:
             sb = info.get("slot_base") or ""
@@ -555,7 +514,6 @@ def write_year_excel(year, half_tag, placements, interval_times, base_interval, 
                     sb = "-".join(sl.split("-")[:-1])
                 else:
                     sb = sl
-            # take first occurrence for details
             if sb not in slot_base_map:
                 slot_base_map[sb] = info
 
@@ -574,13 +532,8 @@ def ranges_overlap(a_start, a_end, b_start, b_end):
     return not (a_end < b_start or b_end < a_start)
 
 def unmerge_ranges_overlapping(ws, row, col_start, col_end):
-    """
-    If any merged range intersects the target row and column span, unmerge it.
-    This avoids MergedCell read-only problems when writing.
-    """
     to_unmerge = []
     for mr in list(ws.merged_cells.ranges):
-        # mr.coord is like "B3:D3" or "C5:C7"
         min_col, min_row, max_col, max_row = mr.min_col, mr.min_row, mr.max_col, mr.max_row
         if row >= min_row and row <= max_row:
             if ranges_overlap(col_start, col_end, min_col, max_col):
@@ -591,14 +544,10 @@ def unmerge_ranges_overlapping(ws, row, col_start, col_end):
         except:
             pass
 
-# -------------------------
-# Main
-# -------------------------
 def main():
     print("\n🧩 Timetable Generator\n")
     settings = load_settings()
 
-    # ask min gap
     while True:
         try:
             min_gap = int(input("Enter minimum gap between consecutive slots in minutes (default 0): ") or "0")
@@ -612,7 +561,6 @@ def main():
     print("Minimum gap:", min_gap, "minutes")
     print("-" * 60)
 
-    # collect years & divisions (explicit full-division names required)
     n_years = int(input("Enter number of academic years: ").strip())
     inputs_per_year = {}
     for y in range(1, n_years + 1):
@@ -625,7 +573,6 @@ def main():
             path = input(f"     Path to Excel/CSV for {full_div}: ").strip()
             inputs_per_year[y][full_div] = path
 
-    # process each year
     for y in range(1, n_years + 1):
         print(f"\nProcessing Year {y} ...")
         div_paths = inputs_per_year[y]
@@ -657,14 +604,12 @@ def main():
                 if any(s in ("fullsem", "halfsem-2") for s in sems):
                     baskets_second.setdefault(b_label, []).extend(members)
 
-            # reference info and collect slot_base for colors
             for n in normals:
                 course_info_per_div[div_full].append(n)
                 sb = n.get("slot_base") or ""
                 if sb:
                     slot_bases_set.add(sb)
                 else:
-                    # fallback derive from slot_label
                     sl = n.get("slot_label") or ""
                     if "-" in sl:
                         slot_bases_set.add("-".join(sl.split("-")[:-1]))
@@ -678,7 +623,6 @@ def main():
                     if sb:
                         slot_bases_set.add(sb)
 
-        # Colors per SLOT NAME (slot_base). deterministic seed for reproducible colors
         colors = {}
         palette = [
             "FF5733", "FF8D1A", "FFC300", "FFEA00", "9AFB60", "2ECC71", "27AE60",
@@ -707,8 +651,6 @@ def main():
                 print("   ...", len(uns_total) - 200, "more not shown ...")
 
     print("\n✅ All done. Timetables saved in ./timetable_outputs")
-
-# Only the schedule_globally() part was modified minimally for your fixes.
 
 if __name__ == "__main__":
     main()
