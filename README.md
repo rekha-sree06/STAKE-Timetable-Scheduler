@@ -1,42 +1,59 @@
-# STAKE Automated Timetable System
+**STAKE Automated Timetable System**
 
-##  Project Overview
-The Automated Timetable System is designed to generate clash-free academic and exam timetables for IIIT Dharwad.  
-It will reduce manual effort, minimize errors, and ensure optimal use of classrooms, labs, and faculty resources.
+Project Overview
+The STAKE Automated Timetable System is a Python-based automation tool that generates clash-free academic timetables for IIIT Dharwad.
+It aims to reduce manual scheduling effort, minimize human error, and ensure optimal utilization of classrooms, labs, and faculty resources.
 
-Currently, the **design phase has been completed** and the project is ready to move into the coding/implementation phase.
+The system reads input Excel sheets containing course details, faculty names, and L-T-P structures, and produces structured, color-coded timetables automatically.
+* Key Features
+* Automatic clash-free timetable generation
+* Faculty workload balancing and availability checks
+* Lecture, Tutorial, and Lab slot scheduling (L-T-P mapping)
+* Support for electives and merged divisions
+* Unit testing setup for validation of functions
+* Excel output with color-coded and merged cells
+* (In Progress) Debugging of slot allotment and elective scheduling logic
 
-##  Key Features
-- Automatic clash-free timetable generation  
-- Faculty workload balancing and availability management  
-- Exam timetable generation and seating arrangement  
-- Real-time updates and (planned) Google Calendar integration  
-- Color-coded and printable timetables  
+Current Status
+* Phase	Status	Notes
+* Requirements Gathering - Completed	
+* System Design	- Completed	
+* Coding & Implementation	- In Progress (core logic implemented, under debugging)
+* Unit Testing	- Test cases added (validation of helper functions and scheduling)
+* Integration & UI	- Planned for next stage
+ 
+Tech Stack
+* Language: Python 3
+* Libraries Used:
+    pandas — Data processing
+    openpyxl — Excel file generation and formatting
+    datetime, random, math — Slot management and time calculations
+    unittest — Unit testing framework
+    Version Control: Git + GitHub
 
-##  Current Status
-- Requirements gathering ✅  
-- System design ✅  
-- Coding/Implementation ❌ (next phase)  
+Repository Structure
 
-##  Planned Tech Stack
-The tech stack will be finalized at the start of coding. Options include:  
-- **Languages:** Python or Java  
-- **Frameworks:** Flask / Django (Python) or Spring Boot (Java)  
-- **Database:** MySQL or PostgreSQL  
-- **Integration:** Google Calendar API  
-- **Frontend:** HTML, CSS, JavaScript (with optional React for advanced UI)
-  
-##  Repository Structure
-- docs/ → DPR, UML diagrams, design documents
-- src/ → Placeholder for source code (to be added in coding phase)
-- tests/ → Placeholder for test cases
-- README.md → Project description
+STAKE-Timetable-Scheduler/
+│
+├── data/                  # Department-wise Excel input files
+├── tests/
+│   ├── TestCases.md       # Documented test cases and expected outputs
+│   └── test_inputs/       # Sample Excel inputs for unit testing
+├── docs/                  # DPR and design-related documents
+├── main.py                # Core timetable generator (currently under debugging)
+└── README.md              # Project overview and status
 
+Team
+* Sachin Kumar -	24BCS125
+* T Rekha Sree -	24BCS152
+* P Haswanth Reddy -	24BCS096
+* Sampath S Koralli	- 24BCS129
 
-##  Team
-- Sachin Kumar (24BCS125)  
-- T Rekha Sree (24BCS152)  
-- P Haswanth Reddy (24BCS096)  
-- Sampath S Koralli (24BCS129)  
+Guided by: Dr. Vivekraj VK
 
-Guided by: **Dr. Vivekraj VK**
+Next Steps
+* Continue debugging and verifying slot allocation logic
+* Ensure tutorial and elective scheduling match L-T-P configuration
+* Add constraint validation (break hours, room conflicts, faculty load)
+* Generate final formatted Excel timetable output
+* Begin UI development phase
