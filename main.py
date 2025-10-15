@@ -23,13 +23,13 @@ def load_settings(path="settings.json"):
         try:
             with open(path, "r") as f:
                 data = json.load(f)
-            print("✅ Loaded settings.json")
+            print(" Loaded settings.json")
         except Exception as e:
-            print("⚠️ Could not read settings.json, using defaults:", e)
+            print(" Could not read settings.json, using defaults:", e)
             data = DEFAULT
     else:
         data = DEFAULT
-        print("⚙️ Using default settings (settings.json not found)")
+        print(" Using default settings (settings.json not found)")
 
     breaks = []
     for b in data.get("break_slots", []):
@@ -522,7 +522,7 @@ def write_year_excel(year, half_tag, placements, interval_times, base_interval, 
     if not wb.sheetnames:
         wb.create_sheet(title="Timetable")
     wb.save(fname)
-    print(f"✅ Saved: {fname}")
+    print(f" Saved: {fname}")
 
 def ranges_overlap(a_start, a_end, b_start, b_end):
     return not (a_end < b_start or b_end < a_start)
@@ -541,7 +541,7 @@ def unmerge_ranges_overlapping(ws, row, col_start, col_end):
             pass
 
 def main():
-    print("\n🧩 Timetable Generator\n")
+    print("\n Timetable Generator\n")
     settings = load_settings()
 
     while True:
@@ -582,7 +582,7 @@ def main():
 
         for div_full, path in div_paths.items():
             if not os.path.exists(path):
-                print(f"⚠️ File not found: {path} for {div_full} — skipping division")
+                print(f" File not found: {path} for {div_full} — skipping division")
                 continue
             df = read_input_file(path)
             normals, baskets = build_slot_requests_for_division(df, div_full, settings)
@@ -640,13 +640,13 @@ def main():
 
         uns_total = uns_first + uns_second
         if uns_total:
-            print("\n⚠️ Unscheduled (some duplicates possible):")
+            print("\n Unscheduled (some duplicates possible):")
             for u in uns_total[:200]:
                 print("   ", u)
             if len(uns_total) > 200:
                 print("   ...", len(uns_total) - 200, "more not shown ...")
 
-    print("\n✅ All done. Timetables saved in ./timetable_outputs")
+    print("\n All done. Timetables saved in ./timetable_outputs")
 
 if __name__ == "__main__":
     main()
