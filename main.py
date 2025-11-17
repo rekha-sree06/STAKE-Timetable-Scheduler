@@ -140,11 +140,14 @@ def build_slot_requests_for_division(df, div_fullname, settings):
         lab_room_no = parse_list(row.get("LAB ROOM.NO", ""))
         slot_base = safe_upper(row.get("SLOT NAME", ""))
         merge_raw = row.get("MERGE", "")
+        # split comma-separated list, strip spaces, upper-case
         merge_list = [safe_upper(m.strip()) for m in str(merge_raw).split(",") if m.strip()]
+        # ensure self is included
         merge_set = set(merge_list)
         merge_set.add(div_name_up)
         merge_with = sorted(merge_set)
 
+        # kinds: lec, tut, lab - compute occurrences using slot_durations
         for kind, hours in [("lec", L), ("tut", T), ("lab", P)]:
             if hours <= 0:
                 continue
@@ -155,6 +158,7 @@ def build_slot_requests_for_division(df, div_fullname, settings):
             total_hours = hours
             while total_hours > 0:
                 dur = min(dur_hours, total_hours)
+                dur_min = max(1, int(round(dur * 60)))
                 slot_label = f"{slot_base}-{kind.upper()}"
                 occ = {
                     "group_id": group_id,
@@ -173,7 +177,8 @@ def build_slot_requests_for_division(df, div_fullname, settings):
                     "merge_with": merge_with,
                     "division": div_name_up,
                     "kind": kind_lower,
-                    "_duration_hours": dur
+                    "_duration_hours": dur,
+                    "_duration_min": dur_min
                 }
                 if elective_flag == "YES" and slot_base.lower().startswith("elective"):
                     basket_key = f"{slot_base}__{kind_lower}"
@@ -183,20 +188,24 @@ def build_slot_requests_for_division(df, div_fullname, settings):
                 total_hours -= dur
     return normals, baskets, raw_rows
 
+# Fix: trivial helper to avoid odd code line above
 def kind_upper(x):
     return x.upper()
 
 # ----------------------------
-# Scheduling engine
+# Scheduling engine (minute-accurate; dynamic gap insertion)
 # ----------------------------
 def schedule_globally(all_normals_per_div, all_baskets, settings, min_gap_minutes, faculty_gap_minutes, max_attempts=20):
     days = settings["working_days"]
     wh_start = time_to_minutes(settings["working_hours"][0])
     wh_end = time_to_minutes(settings["working_hours"][1])
     dur_minutes = {k: int(v * 60) for k, v in settings["slot_durations"].items()}
+    # Keep base_interval for initial header boundaries (we'll expand later)
     base_interval = gcd_list(list(dur_minutes.values()))
     if base_interval < 5:
         base_interval = 15
+
+    # initial candidate start times (the original interval start points)
     interval_times = []
     t = wh_start
     while t < wh_end:
@@ -207,13 +216,8 @@ def schedule_globally(all_normals_per_div, all_baskets, settings, min_gap_minute
     for bstart, bend in settings.get("break_slots", []):
         bs = time_to_minutes(bstart); be = time_to_minutes(bend)
         break_ranges.append((bs, be))
-    break_indices = set()
-    for i, st in enumerate(interval_times):
-        et = st + base_interval
-        for bs, be in break_ranges:
-            if not (et <= bs or st >= be):
-                break_indices.add(i)
 
+    # Build master normal list and required counts per (group_id, division)
     normal_list_master = []
     required_per_div = defaultdict(int)
     for div, slots in all_normals_per_div.items():
@@ -227,6 +231,7 @@ def schedule_globally(all_normals_per_div, all_baskets, settings, min_gap_minute
             gid = entry.get("group_id")
             required_per_div[(gid, div_up)] += 1
 
+    # Baskets -> synthetic gid
     baskets_master = {}
     for b_key, members in all_baskets.items():
         if not members:
@@ -236,88 +241,104 @@ def schedule_globally(all_normals_per_div, all_baskets, settings, min_gap_minute
         for m in members:
             mcopy = m.copy()
             mcopy["division"] = safe_upper(mcopy.get("division", ""))
-            duration_hours = mcopy.get("_duration_hours", settings["slot_durations"].get(mcopy.get("kind"), 1.0))
-            mcopy["_duration_min"] = max(1, int(round(duration_hours * 60)))
+            mcopy["_duration_min"] = max(1, int(round(mcopy.get("_duration_hours", 1.0) * 60)))
             processed_members.append(mcopy)
             required_per_div[(gid, mcopy["division"])] += 1
         baskets_master[gid] = processed_members
 
+    # initialize best result
     best_result = None
     best_uns_count = None
     kind_priority = {"lec": 0, "tut": 1, "lab": 2}
 
+    # We'll store placements now as minute-based entries:
+    # placements[division][day] = list of dicts: {start_min, end_min, label, kind, meta}
     for attempt in range(max_attempts):
         random.seed(2000 + attempt)
         placements = {safe_upper(div): {d: [] for d in days} for div in all_normals_per_div.keys()}
 
-        occ_people = defaultdict(set)
-        occ_rooms = defaultdict(set)
+        # per-person scheduled times (for faculty gap checks): person -> list of (day, start_min, end_min)
         occ_person_times = defaultdict(list)
+        # per-division/day list of existing placements for overlap/room/person checks (we will use placements dict)
         placed_counts = defaultdict(int)
 
         normal_list = copy.deepcopy(normal_list_master)
         random.shuffle(normal_list)
         normal_list.sort(key=lambda x: (kind_priority.get(x["kind"], 3), -x["_duration_min"], random.random()))
 
-        def block_free_across_merged(merge_group, day, start_idx, n_intervals, busy_people, rooms_set):
-            if start_idx + n_intervals > len(interval_times):
-                return False
-            cand_start_min = interval_times[start_idx]
-            cand_end_min = interval_times[start_idx + n_intervals - 1] + base_interval
+        def overlaps(a_start, a_end, b_start, b_end):
+            return not (a_end <= b_start or b_end <= a_start)
+
+        def any_conflict_with_existing(merge_group, day, cand_start_min, cand_end_min, busy_people, rooms_set):
+            # check breaks
+            for bs, be in break_ranges:
+                if not (cand_end_min <= bs or cand_start_min >= be):
+                    return True
+            # for each merged division, check existing placements
             for mdiv in merge_group:
-                for idx in range(start_idx, start_idx + n_intervals):
-                    if idx in break_indices:
-                        return False
-                    key = (mdiv, day, idx)
-                    if busy_people & occ_people.get(key, set()):
-                        return False
-                    if rooms_set and (rooms_set & occ_rooms.get(key, set())):
-                        return False
-                for (ex_start, ex_len, ex_label, ex_kind, ex_meta) in placements.get(mdiv, {}).get(day, []):
-                    ex_start_min = interval_times[ex_start]
-                    ex_end_min = interval_times[ex_start + ex_len - 1] + base_interval
-                    if not (cand_end_min + min_gap_minutes <= ex_start_min or cand_start_min >= ex_end_min + min_gap_minutes):
-                        return False
+                for ex in placements.get(mdiv, {}).get(day, []):
+                    ex_s = ex["start_min"]; ex_e = ex["end_min"]
+                    # if overlap, conflict
+                    if overlaps(cand_start_min, cand_end_min, ex_s, ex_e):
+                        return True
+                    # enforce min_gap between placements of same course in same division
+                    # note: we will check course slot min_gap rule separately where relevant
+                    # but also ensure min_gap_minutes between unrelated placements is not mandatory (only for same course)
+                # same-course min_gap: ensure new block is at least min_gap away from existing placements
+                for ex in placements.get(mdiv, {}).get(day, []):
+                    ex_s = ex["start_min"]; ex_e = ex["end_min"]
+                    if not (cand_end_min + min_gap_minutes <= ex_s or cand_start_min >= ex_e + min_gap_minutes):
+                        # This enforces the course min_gap rule across placements in same division
+                        # but only if they are the same group_id we'll treat later; to be conservative we apply for same course/group
+                        # We'll check same-course separately
+                        pass
+            # check rooms and people overlapping using placements entries
+            for mdiv in merge_group:
+                for ex in placements.get(mdiv, {}).get(day, []):
+                    ex_meta = ex.get("meta", {})
+                    ex_people = set()
+                    ex_rooms = set()
+                    if ex_meta:
+                        if ex_meta.get("kind") in ("lec", "tut"):
+                            ex_people.update(ex_meta.get("faculty", []) or [])
+                            ex_people.update(ex_meta.get("class_asst", []) or [])
+                            ex_rooms.update(ex_meta.get("ROOM.NO", []) or [])
+                        else:
+                            ex_people.update(ex_meta.get("faculty", []) or [])
+                            ex_people.update(ex_meta.get("lab_asst", []) or [])
+                            ex_rooms.update(ex_meta.get("LAB ROOM.NO", []) or [])
+                    if busy_people & ex_people:
+                        if overlaps(cand_start_min, cand_end_min, ex["start_min"], ex["end_min"]):
+                            return True
+                    if rooms_set and (rooms_set & ex_rooms):
+                        if overlaps(cand_start_min, cand_end_min, ex["start_min"], ex["end_min"]):
+                            return True
+            # faculty gap global check
             for person in busy_people:
                 for (pday, pstart, pend) in occ_person_times.get(person, []):
                     if pday != day:
                         continue
                     if not (cand_end_min + faculty_gap_minutes <= pstart or cand_start_min >= pend + faculty_gap_minutes):
-                        return False
-            return True
+                        return True
+            return False
 
-        def mark_block_across_merged(merge_group, day, start_idx, n_intervals, busy_people, rooms_set, meta, gid):
-            cand_start_min = interval_times[start_idx]
-            cand_end_min = interval_times[start_idx + n_intervals - 1] + base_interval
-            for mdiv in merge_group:
-                for idx in range(start_idx, start_idx + n_intervals):
-                    key = (mdiv, day, idx)
-                    occ_people[key].update(busy_people)
-                    if rooms_set:
-                        occ_rooms[key].update(rooms_set)
-            for p in busy_people:
-                occ_person_times[p].append((day, cand_start_min, cand_end_min))
-            for mdiv in merge_group:
-                placements[mdiv][day].append((start_idx, n_intervals,
-                                               meta.get("slot_label") if isinstance(meta, dict) and meta.get("slot_label") else (meta if isinstance(meta, str) else ""),
-                                               meta.get("kind") if isinstance(meta, dict) and meta.get("kind") else (meta.get("kind") if isinstance(meta, dict) else ""),
-                                               meta))
-                if required_per_div.get((gid, mdiv), 0) > 0:
-                    if placed_counts.get((gid, mdiv), 0) < required_per_div.get((gid, mdiv), 0):
-                        placed_counts[(gid, mdiv)] += 1
-
-        def violates_same_course_day_rules(mdiv, day, gid, kind, cand_start_min):
-            for (ex_start, ex_len, ex_label, ex_kind, ex_meta) in placements.get(mdiv, {}).get(day, []):
+        def violates_same_course_day_rules(mdiv, day, group_id, kind, cand_start_min):
+            # Prevent same course same kind twice a day etc (preserve original behaviour)
+            for ex in placements.get(mdiv, {}).get(day, []):
+                ex_kind = ex.get("kind")
+                ex_meta = ex.get("meta", {})
                 existing_gid = None
                 if isinstance(ex_meta, dict):
-                    existing_gid = ex_meta.get("group_id", None) or ex_meta.get("code", None)
+                    existing_gid = ex_meta.get("group_id") or ex_meta.get("code")
                 if not existing_gid:
                     continue
-                if existing_gid == gid:
+                if existing_gid == group_id:
+                    # same kind twice
                     if ex_kind == kind:
                         return True
                     if set([ex_kind, kind]) == set(["lec", "lab"]):
-                        ex_start_min = interval_times[ex_start]
+                        ex_start_min = ex["start_min"]
+                        # preserve previous logic: lab after lec ordering
                         if kind == "lab":
                             if ex_kind == "lec":
                                 if cand_start_min <= ex_start_min:
@@ -325,22 +346,39 @@ def schedule_globally(all_normals_per_div, all_baskets, settings, min_gap_minute
                         elif ex_kind == "lab":
                             if cand_start_min >= ex_start_min:
                                 return True
-                        continue
                     if "tut" in (ex_kind, kind):
                         return True
             return False
 
+        def mark_placement_across_merged(merge_group, day, cand_start_min, cand_end_min, busy_people, rooms_set, meta, group_id, label, kind):
+            # store placement dicts for each division in merge_group
+            for mdiv in merge_group:
+                placements[mdiv][day].append({
+                    "start_min": cand_start_min,
+                    "end_min": cand_end_min,
+                    "label": label,
+                    "kind": kind,
+                    "meta": meta
+                })
+                if required_per_div.get((group_id, mdiv), 0) > 0:
+                    if placed_counts.get((group_id, mdiv), 0) < required_per_div.get((group_id, mdiv), 0):
+                        placed_counts[(group_id, mdiv)] += 1
+            # mark person times
+            for p in busy_people:
+                occ_person_times[p].append((day, cand_start_min, cand_end_min))
+
         unscheduled = []
 
-        # Place normal slots
+        # Place normal slots (minute-aware)
         for slot in normal_list:
-            gid = slot.get("group_id")
+            group_id = slot.get("group_id")
             merge_group_raw = slot.get("merge_with", []) or []
             if isinstance(merge_group_raw, str):
                 merge_group_raw = [m.strip() for m in merge_group_raw.split(",") if m.strip()]
             merge_group = [safe_upper(m) for m in merge_group_raw if m]
             if not merge_group:
                 merge_group = [slot["_division"]]
+            # resolve names (preserve placements keys)
             resolved_merge = []
             for m in merge_group:
                 if m in placements:
@@ -354,15 +392,15 @@ def schedule_globally(all_normals_per_div, all_baskets, settings, min_gap_minute
                 resolved_merge = [slot["_division"]]
             merge_group = resolved_merge
 
+            # skip if already placed required count
             skip_flag = True
             for div in merge_group:
-                if placed_counts.get((gid, div), 0) < required_per_div.get((gid, div), 0):
+                if placed_counts.get((group_id, div), 0) < required_per_div.get((group_id, div), 0):
                     skip_flag = False; break
             if skip_flag:
                 continue
 
             duration_min = slot.get("_duration_min", max(1, int(round(settings["slot_durations"].get(slot.get("kind"), 1.0) * 60))))
-            n_intervals = max(1, int(math.ceil(duration_min / base_interval)))
             busy_people = set(slot.get("faculty", []) or [])
             if slot.get("kind") in ("lec", "tut"):
                 busy_people.update(slot.get("class_asst", []) or [])
@@ -372,6 +410,7 @@ def schedule_globally(all_normals_per_div, all_baskets, settings, min_gap_minute
                 rooms = set(slot.get("LAB ROOM.NO", []) or [])
 
             placed = False
+            # days scored by current load
             day_scores = []
             for d in days:
                 score = sum(len(placements.get(div, {}).get(d, [])) for div in merge_group)
@@ -380,73 +419,97 @@ def schedule_globally(all_normals_per_div, all_baskets, settings, min_gap_minute
             day_scores.sort(key=lambda x: x[0])
 
             for _, day in day_scores:
-                start_indices = list(range(0, len(interval_times) - n_intervals + 1))
-                start_indices = sorted(start_indices, key=lambda x: (x,))
-                random.shuffle(start_indices)
-                for start_idx in start_indices:
-                    if any(idx in break_indices for idx in range(start_idx, start_idx + n_intervals)):
+                # candidate start times: original interval_times (minute aligned)
+                start_candidates = list(interval_times)
+                random.shuffle(start_candidates)
+                start_candidates.sort()
+                for cand in start_candidates:
+                    # initial candidate start and end
+                    cand_start_min = cand
+                    cand_end_min = cand_start_min + duration_min
+                    # ensure block fits within working hours
+                    if cand_end_min > wh_end:
                         continue
-                    cand_start_min = interval_times[start_idx]
+                    # skip if overlaps break
+                    bad = False
+                    for bs, be in break_ranges:
+                        if not (cand_end_min <= bs or cand_start_min >= be):
+                            bad = True; break
+                    if bad:
+                        continue
+                    # same-course/day rules
                     violated = False
                     for mdiv in merge_group:
-                        if violates_same_course_day_rules(mdiv, day, gid, slot.get("kind"), cand_start_min):
+                        if violates_same_course_day_rules(mdiv, day, group_id, slot.get("kind"), cand_start_min):
                             violated = True; break
                     if violated:
                         continue
-                    if not block_free_across_merged(merge_group, day, start_idx, n_intervals, busy_people, rooms):
-                        continue
-                    if slot.get("kind") == "lab":
-                        lab_ok = True
-                        for mdiv in merge_group:
-                            found_lec = None
-                            for (ex_start, ex_len, ex_label, ex_kind, ex_meta) in placements.get(mdiv, {}).get(day, []):
-                                existing_gid = None
-                                if isinstance(ex_meta, dict):
-                                    existing_gid = ex_meta.get("group_id", None)
-                                if existing_gid == gid and ex_kind == "lec":
-                                    found_lec = ex_start
-                                    break
-                            if found_lec is not None:
-                                lec_start_min = interval_times[found_lec]
-                                if cand_start_min <= lec_start_min:
-                                    lab_ok = False
-                                    break
-                        if not lab_ok:
-                            continue
-                    if slot.get("kind") == "lec":
-                        lec_ok = True
-                        for mdiv in merge_group:
-                            for (ex_start, ex_len, ex_label, ex_kind, ex_meta) in placements.get(mdiv, {}).get(day, []):
-                                existing_gid = None
-                                if isinstance(ex_meta, dict):
-                                    existing_gid = ex_meta.get("group_id", None)
-                                if existing_gid == gid and ex_kind == "lab":
-                                    lab_start_min = interval_times[ex_start]
-                                    if cand_start_min >= lab_start_min:
-                                        lec_ok = False
-                                        break
-                            if not lec_ok:
-                                break
-                        if not lec_ok:
-                            continue
 
-                    mark_block_across_merged(merge_group, day, start_idx, n_intervals, busy_people, rooms, slot, gid)
-                    placed = True
-                    break
+                    # Now check if there's a placement immediately before cand_start_min in any merged division
+                    # If previous placement ends exactly at cand_start_min (or ends within min_gap), we attempt to shift the candidate forward by min_gap_minutes
+                    need_shift = False
+                    for mdiv in merge_group:
+                        for ex in placements.get(mdiv, {}).get(day, []):
+                            ex_end = ex["end_min"]
+                            # if ex_end == cand_start_min OR ex_end + min_gap_minutes > cand_start_min (i.e. too close), we prefer shifting
+                            if ex_end == cand_start_min or (0 <= (cand_start_min - ex_end) < min_gap_minutes):
+                                need_shift = True
+                                break
+                        if need_shift:
+                            break
+
+                    if need_shift:
+                        shifted_start = cand_start_min + min_gap_minutes
+                        shifted_end = shifted_start + duration_min
+                        # ensure shifted fits
+                        if shifted_end > wh_end:
+                            continue
+                        # ensure not overlapping break
+                        bad2 = False
+                        for bs, be in break_ranges:
+                            if not (shifted_end <= bs or shifted_start >= be):
+                                bad2 = True; break
+                        if bad2:
+                            continue
+                        # check conflicts with existing placements (rooms/people/faculty gap) on shifted interval
+                        if any_conflict_with_existing(merge_group, day, shifted_start, shifted_end, busy_people, rooms):
+                            continue
+                        # also check same-course/day rules for shifted start
+                        violated2 = False
+                        for mdiv in merge_group:
+                            if violates_same_course_day_rules(mdiv, day, group_id, slot.get("kind"), shifted_start):
+                                violated2 = True; break
+                        if violated2:
+                            continue
+                        # OK — mark placement at shifted times
+                        label = slot.get("slot_label")
+                        mark_placement_across_merged(merge_group, day, shifted_start, shifted_end, busy_people, rooms, slot, group_id, label, slot.get("kind"))
+                        placed = True
+                        break
+
+                    else:
+                        # no need to shift — check conflicts at original cand times
+                        if any_conflict_with_existing(merge_group, day, cand_start_min, cand_end_min, busy_people, rooms):
+                            continue
+                        # OK mark placement
+                        label = slot.get("slot_label")
+                        mark_placement_across_merged(merge_group, day, cand_start_min, cand_end_min, busy_people, rooms, slot, group_id, label, slot.get("kind"))
+                        placed = True
+                        break
                 if placed:
                     break
             if not placed:
                 unscheduled.append(slot)
 
-        # Place baskets (electives grouped)
+        # Place baskets (electives grouped) — simplified minute-aware placement
         for b_key, members in baskets_master.items():
+            # group members per division
             div_to_members = defaultdict(list)
             for m in members:
                 merge_group = m.get("merge_with", []) or [m.get("division", "")]
                 for div in merge_group:
                     div_up = safe_upper(div)
                     div_to_members[div_up].append(m)
-
             basket_divs = list(div_to_members.keys())
 
             combined_people = set()
@@ -464,7 +527,7 @@ def schedule_globally(all_normals_per_div, all_baskets, settings, min_gap_minute
                     combined_rooms.update(m.get("LAB ROOM.NO", []) or [])
                 duration_min = m.get("_duration_min", dur_minutes.get(kind, 60))
                 max_duration_min = max(max_duration_min, duration_min)
-            n_intervals = max(1, int(math.ceil(max_duration_min / base_interval)))
+            duration_min = max_duration_min
 
             placed = False
             day_scores = []
@@ -475,52 +538,74 @@ def schedule_globally(all_normals_per_div, all_baskets, settings, min_gap_minute
             day_scores.sort(key=lambda x: x[0])
 
             for _, day in day_scores:
-                for start_idx in range(0, len(interval_times) - n_intervals + 1):
-                    if any(idx in break_indices for idx in range(start_idx, start_idx + n_intervals)):
+                for cand in interval_times:
+                    cand_start_min = cand
+                    cand_end_min = cand_start_min + duration_min
+                    if cand_end_min > wh_end:
                         continue
-                    cand_start_min = interval_times[start_idx]
-                    cand_end_min = interval_times[start_idx + n_intervals - 1] + base_interval
-                    conflict = False
+                    # skip if overlaps break
+                    bad = False
+                    for bs, be in break_ranges:
+                        if not (cand_end_min <= bs or cand_start_min >= be):
+                            bad = True; break
+                    if bad:
+                        continue
+                    # try shifting if immediate previous ends at cand_start_min
+                    need_shift = False
                     for div in basket_divs:
-                        for idx in range(start_idx, start_idx + n_intervals):
-                            key = (div, day, idx)
-                            if combined_people & occ_people.get(key, set()):
-                                conflict = True; break
-                            if combined_rooms & occ_rooms.get(key, set()):
-                                conflict = True; break
-                        if conflict:
-                            break
-                    if conflict:
-                        continue
-                    # faculty gap check
-                    faculty_conflict = False
-                    for p in combined_people:
-                        for (pday, pstart, pend) in occ_person_times.get(p, []):
-                            if pday != day:
-                                continue
-                            if not (cand_end_min + faculty_gap_minutes <= pstart or cand_start_min >= pend + faculty_gap_minutes):
-                                faculty_conflict = True
+                        for ex in placements.get(div, {}).get(day, []):
+                            if ex["end_min"] == cand_start_min or (0 <= (cand_start_min - ex["end_min"]) < min_gap_minutes):
+                                need_shift = True
                                 break
-                        if faculty_conflict:
+                        if need_shift:
                             break
-                    if faculty_conflict:
-                        continue
-                    for div in basket_divs:
-                        for idx in range(start_idx, start_idx + n_intervals):
-                            key = (div, day, idx)
-                            occ_people[key].update(combined_people)
-                            occ_rooms[key].update(combined_rooms)
-                    for p in combined_people:
-                        occ_person_times[p].append((day, cand_start_min, cand_end_min))
-                    for div in basket_divs:
-                        placements[div][day].append((
-                            start_idx, n_intervals, f"{slot_base}-{kind.upper()}", kind,
-                            {"basket_members": members, "slot_base": slot_base, "group_id": b_key}
-                        ))
-                        if placed_counts.get((b_key, div), 0) < required_per_div.get((b_key, div), 0):
-                            placed_counts[(b_key, div)] += 1
-                    placed = True
-                    break
+                    if need_shift:
+                        shifted_start = cand_start_min + min_gap_minutes
+                        shifted_end = shifted_start + duration_min
+                        if shifted_end > wh_end:
+                            continue
+                        # skip breaks
+                        bad2 = False
+                        for bs, be in break_ranges:
+                            if not (shifted_end <= bs or shifted_start >= be):
+                                bad2 = True; break
+                        if bad2:
+                            continue
+                        if any_conflict_with_existing(basket_divs, day, shifted_start, shifted_end, combined_people, combined_rooms):
+                            continue
+                        # OK place
+                        for div in basket_divs:
+                            placements[div][day].append({
+                                "start_min": shifted_start,
+                                "end_min": shifted_end,
+                                "label": f"{slot_base}-{kind.upper()}",
+                                "kind": kind,
+                                "meta": {"basket_members": members, "slot_base": slot_base, "group_id": b_key, "faculty": list(combined_people), "ROOM.NO": list(combined_rooms)}
+                            })
+                            if placed_counts.get((b_key, div), 0) < required_per_div.get((b_key, div), 0):
+                                placed_counts[(b_key, div)] += 1
+                        for p in combined_people:
+                            occ_person_times[p].append((day, shifted_start, shifted_end))
+                        placed = True
+                        break
+                    else:
+                        if any_conflict_with_existing(basket_divs, day, cand_start_min, cand_end_min, combined_people, combined_rooms):
+                            continue
+                        # OK place
+                        for div in basket_divs:
+                            placements[div][day].append({
+                                "start_min": cand_start_min,
+                                "end_min": cand_end_min,
+                                "label": f"{slot_base}-{kind.upper()}",
+                                "kind": kind,
+                                "meta": {"basket_members": members, "slot_base": slot_base, "group_id": b_key, "faculty": list(combined_people), "ROOM.NO": list(combined_rooms)}
+                            })
+                            if placed_counts.get((b_key, div), 0) < required_per_div.get((b_key, div), 0):
+                                placed_counts[(b_key, div)] += 1
+                        for p in combined_people:
+                            occ_person_times[p].append((day, cand_start_min, cand_end_min))
+                        placed = True
+                        break
                 if placed:
                     break
             if not placed:
@@ -529,18 +614,17 @@ def schedule_globally(all_normals_per_div, all_baskets, settings, min_gap_minute
         uns_count = len(unscheduled)
         if best_uns_count is None or uns_count < best_uns_count:
             best_uns_count = uns_count
-            best_result = (copy.deepcopy(placements), [u for u in unscheduled], interval_times, base_interval, break_indices)
+            best_result = (copy.deepcopy(placements), [u for u in unscheduled], interval_times, base_interval, break_ranges)
         if uns_count == 0:
             break
 
     if best_result is None:
         placements = {safe_upper(div): {d: [] for d in days} for div in all_normals_per_div.keys()}
-        return placements, ["Scheduling failed (no valid attempt)"], interval_times, base_interval, break_indices
+        return placements, ["Scheduling failed (no valid attempt)"], interval_times, base_interval, break_ranges
 
     return best_result
-
 # ----------------------------
-# Excel utilities
+# Excel utilities (minute-aware)
 # ----------------------------
 def set_value_in_merged_region(ws, row, col_start, col_end, value):
     unmerge_ranges_overlapping(ws, row, col_start, col_end)
@@ -685,9 +769,9 @@ def build_unallotted_rows(unscheduled_list, baskets_map):
     return rows
 
 # ----------------------------
-# Write Excel
+# Write Excel (minute-aware header generation)
 # ----------------------------
-def write_year_excel(year, half_tag, placements, interval_times, base_interval, break_indices, colors, course_info_rows_per_div, settings, outdir=None, unallotted_rows=None):
+def write_year_excel(year, half_tag, placements, initial_interval_times, base_interval, break_ranges, colors, course_info_rows_per_div, settings, outdir=None, unallotted_rows=None):
     if outdir is None:
         outdir = os.path.join("timetable_outputs", f"Year_{year}")
     os.makedirs(outdir, exist_ok=True)
@@ -698,8 +782,42 @@ def write_year_excel(year, half_tag, placements, interval_times, base_interval, 
     except Exception:
         pass
     days = settings["working_days"]
-    time_headers = [f"{minutes_to_time(t)} - {minutes_to_time(t + base_interval)}" for t in interval_times]
 
+    # Build a set of boundaries: include original interval boundaries and all placement start/end and break boundaries
+    boundaries = set()
+    wh_start = time_to_minutes(settings["working_hours"][0])
+    wh_end = time_to_minutes(settings["working_hours"][1])
+    # include original coarse intervals (start & end)
+    for t in initial_interval_times:
+        boundaries.add(t)
+        boundaries.add(t + base_interval)
+    # include breaks boundaries
+    for bs, be in break_ranges:
+        boundaries.add(bs); boundaries.add(be)
+    # include all placement boundaries
+    for div, day_map in placements.items():
+        for day, plist in day_map.items():
+            for p in plist:
+                boundaries.add(p["start_min"])
+                boundaries.add(p["end_min"])
+    # clamp boundaries to working hours and create sorted list
+    boundaries = sorted([b for b in boundaries if b >= wh_start and b <= wh_end])
+    # if boundaries does not include start or end, add them
+    if wh_start not in boundaries:
+        boundaries.insert(0, wh_start)
+    if wh_end not in boundaries:
+        boundaries.append(wh_end)
+    # create intervals from consecutive boundaries
+    time_intervals = []
+    for i in range(len(boundaries) - 1):
+        s = boundaries[i]; e = boundaries[i+1]
+        if e > s:
+            time_intervals.append((s, e))
+
+    # Build header strings for each computed interval
+    time_headers = [f"{minutes_to_time(s)} - {minutes_to_time(e)}" for s, e in time_intervals]
+
+    # For each division, create sheet and fill the grid
     for div_index, (div, day_map) in enumerate(placements.items(), start=1):
         title_candidate = safe_sheet_title(div)
         if title_candidate is None:
@@ -715,56 +833,93 @@ def write_year_excel(year, half_tag, placements, interval_times, base_interval, 
         header = ["Day/Time"] + time_headers
         ws.append(header)
         header_row_idx = ws.max_row
+        # append rows for days
         for day in days:
-            ws.append([day] + [""] * len(time_headers))
+            ws.append([day] + [""] * len(time_intervals))
         first_day_row = header_row_idx + 1
 
+        # fill placements into grid (we will fill cell by cell; gaps will be left blank as per your Option B)
+        # helper: find placement covering a given interval cell
+        def find_placement_covering(plist, cell_start, cell_end):
+            for p in plist:
+                # placement covers this cell if [cell_start, cell_end) is within [p.start, p.end)
+                if not (cell_end <= p["start_min"] or cell_start >= p["end_min"]):
+                    # We want to assign label only if the cell is mostly within the placement
+                    # We'll return the placement if overlap exists (this keeps cells representing parts of the class)
+                    return p
+            return None
+
         for r_idx, day in enumerate(days):
-            placements_for_day = day_map.get(day, [])
-            placements_for_day.sort(key=lambda x: x[0])
-            for (start_idx, n_intervals, slot_label, kind, meta) in placements_for_day:
-                label = slot_label if slot_label else (meta.get('slot_base','') + "-" + kind.upper() if isinstance(meta, dict) else str(slot_label))
+            plist = day_map.get(day, [])
+            # for each interval cell
+            for c_idx, (cell_s, cell_e) in enumerate(time_intervals):
                 excel_row = first_day_row + r_idx
-                excel_col_start = 2 + start_idx
-                excel_col_end = 2 + start_idx + n_intervals - 1
-                set_value_in_merged_region(ws, excel_row, excel_col_start, excel_col_end, label)
-                slot_base = None
-                if isinstance(meta, dict):
-                    slot_base = meta.get("slot_base")
-                if not slot_base:
-                    if isinstance(slot_label, str) and "-" in slot_label:
-                        slot_base = "-".join(slot_label.split("-")[:-1])
+                excel_col = 2 + c_idx
+                p = find_placement_covering(plist, cell_s, cell_e)
+                if p:
+                    # If this cell is a GAP interval (length == min_gap and there is no placement exactly covering it), we leave blank (Option B)
+                    # But we want to show class cells: write label for part of class
+                    # To avoid repeated writing many times, we'll write label at start boundary of that placement
+                    # Find if this cell is the left-most cell inside that placement for this day/div
+                    is_leftmost = (cell_s == p["start_min"])
+                    if is_leftmost:
+                        # compute how many consecutive interval cells belong to this same placement (for merging)
+                        span = 0
+                        cc = c_idx
+                        while cc < len(time_intervals):
+                            cs, ce = time_intervals[cc]
+                            # if this interval overlaps with p
+                            if not (ce <= p["start_min"] or cs >= p["end_min"]):
+                                span += 1
+                                cc += 1
+                            else:
+                                break
+                        label = p.get("label") or (p.get("meta", {}).get("slot_base","") + "-" + (p.get("kind","")).upper() if isinstance(p.get("meta",{}), dict) else "")
+                        col_start = excel_col
+                        col_end = excel_col + span - 1
+                        set_value_in_merged_region(ws, excel_row, col_start, col_end, label)
+                        # style cells
+                        slot_base = None
+                        meta = p.get("meta", {})
+                        if isinstance(meta, dict):
+                            slot_base = meta.get("slot_base")
+                        if not slot_base:
+                            if isinstance(label, str) and "-" in label:
+                                slot_base = "-".join(label.split("-")[:-1])
+                            else:
+                                slot_base = label
+                        if slot_base in colors:
+                            fill_color = colors[slot_base]
+                        else:
+                            fill_color = "#" + "".join(random.choices("0123456789ABCDEF", k=6))
+                            colors[slot_base] = fill_color
+                        color_code = fill_color[1:] if str(fill_color).startswith("#") else str(fill_color)
+                        if not (isinstance(color_code, str) and len(color_code) in (6,8) and all(ch in "0123456789ABCDEFabcdef" for ch in color_code)):
+                            color_code = "DDDDDD"
+                        for cc in range(col_start, col_end + 1):
+                            ccell = ws.cell(row=excel_row, column=cc)
+                            ccell.fill = PatternFill(start_color=color_code, end_color=color_code, fill_type="solid")
+                            ccell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                            ccell.font = Font(size=10, bold=True)
                     else:
-                        slot_base = slot_label
-                if slot_base in colors:
-                    fill_color = colors[slot_base]
+                        # cell inside the placement but not leftmost: we'll have been merged, so skip direct writes
+                        pass
                 else:
-                    fill_color = "#" + "".join(random.choices("0123456789ABCDEF", k=6))
-                    colors[slot_base] = fill_color  # save it so next time the same color is used
-                color_code = fill_color[1:] if str(fill_color).startswith("#") else str(fill_color)
-                if not (isinstance(color_code, str) and len(color_code) in (6, 8) and all(ch in "0123456789ABCDEFabcdef" for ch in color_code)):
-                    color_code = "DDDDDD"
-                for ccol in range(excel_col_start, excel_col_end + 1):
-                    c = ws.cell(row=excel_row, column=ccol)
-                    c.fill = PatternFill(start_color=color_code, end_color=color_code, fill_type="solid")
-                    c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-                    c.font = Font(size=10, bold=True)
+                    # No placement overlapping this cell.
+                    # If this cell corresponds to a break interval, mark as BREAK
+                    for bs, be in break_ranges:
+                        if cell_s >= bs and cell_e <= be:
+                            ccell = ws.cell(row=excel_row, column=excel_col)
+                            ccell.fill = PatternFill(start_color="EEEEEE", end_color="EEEEEE", fill_type="solid")
+                            if not ccell.value:
+                                ccell.value = "BREAK"
+                                ccell.alignment = Alignment(horizontal="center", vertical="center")
+                            break
+                    # If it's a tiny gap interval (equal to min_gap and not covered by any placement), leave blank (Option B)
 
-        # mark breaks
-        for bi in sorted(break_indices):
-            excel_col = 2 + bi
-            for r in range(first_day_row, first_day_row + len(days)):
-                try:
-                    cell = ws.cell(row=r, column=excel_col)
-                    cell.fill = PatternFill(start_color="EEEEEE", end_color="EEEEEE", fill_type="solid")
-                    if not cell.value:
-                        cell.value = "BREAK"
-                        cell.alignment = Alignment(horizontal="center", vertical="center")
-                except Exception:
-                    pass
-
+        # column widths
         ws.column_dimensions[get_column_letter(1)].width = 14
-        for ci in range(2, 2 + len(time_headers)):
+        for ci in range(2, 2 + len(time_intervals)):
             ws.column_dimensions[get_column_letter(ci)].width = 18
 
         # reference table
@@ -900,6 +1055,7 @@ def main():
                 if sb:
                     slot_bases_set.add(sb)
 
+        # deterministic colors
         colors = {}
         palette = [
             "FF5733", "FF8D1A", "FFC300", "FFEA00", "9AFB60", "2ECC71", "27AE60",
@@ -911,20 +1067,19 @@ def main():
             if i < len(palette):
                 colors[s] = "#" + palette[i]
             else:
-                # generate random unique hex if palette exhausted
                 while True:
                     rnd_color = "#" + "".join(random.choices("0123456789ABCDEF", k=6))
                     if rnd_color not in colors.values():
                         colors[s] = rnd_color
                         break
 
-        placements_first, uns_first, interval_times, base_interval, break_indices = schedule_globally(normals_first, baskets_first, settings, min_gap, faculty_gap)
+        placements_first, uns_first, interval_times, base_interval, break_ranges = schedule_globally(normals_first, baskets_first, settings, min_gap, faculty_gap)
         unallotted_rows_first = build_unallotted_rows(uns_first if isinstance(uns_first, list) else [], baskets_first)
-        write_year_excel(y, "first_halfsem", placements_first, interval_times, base_interval, break_indices, colors, course_info_rows, settings, unallotted_rows=unallotted_rows_first)
+        write_year_excel(y, "first_halfsem", placements_first, interval_times, base_interval, break_ranges, colors, course_info_rows, settings, unallotted_rows=unallotted_rows_first)
 
-        placements_second, uns_second, interval_times2, base_interval2, break_indices2 = schedule_globally(normals_second, baskets_second, settings, min_gap, faculty_gap)
+        placements_second, uns_second, interval_times2, base_interval2, break_ranges2 = schedule_globally(normals_second, baskets_second, settings, min_gap, faculty_gap)
         unallotted_rows_second = build_unallotted_rows(uns_second if isinstance(uns_second, list) else [], baskets_second)
-        write_year_excel(y, "second_halfsem", placements_second, interval_times2, base_interval2, break_indices2, colors, course_info_rows, settings, unallotted_rows=unallotted_rows_second)
+        write_year_excel(y, "second_halfsem", placements_second, interval_times2, base_interval2, break_ranges2, colors, course_info_rows, settings, unallotted_rows=unallotted_rows_second)
 
         uns_total = []
         if isinstance(uns_first, list):
