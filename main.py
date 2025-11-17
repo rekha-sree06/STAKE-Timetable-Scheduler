@@ -1013,9 +1013,9 @@ def main():
         n_div = int(input(f"Year {y}, number of divisions: ").strip())
         inputs_per_year[y] = {}
         for d in range(1, n_div + 1):
-            full_div = input(f"  Full name for Division {d} (use exact name for MERGE, e.g. '1CSEA'): ").strip()
+            full_div = input(f"  Short name for Division {d} (use exact name for MERGE, e.g. '1CSEA'): ").strip()
             if not full_div:
-                full_div = input("    Division name cannot be blank — please enter full division name: ").strip()
+                full_div = input("    Division name cannot be blank — please enter short division name: ").strip()
             path = input(f"     Path to Excel/CSV for {full_div}: ").strip()
             inputs_per_year[y][full_div] = path
 
