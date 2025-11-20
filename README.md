@@ -5,7 +5,7 @@ It significantly reduces manual workload, minimizes scheduling errors, and ensur
 
 ---
 
-## 📌 Project Overview
+##  Project Overview
 
 This system automatically generates:
 
@@ -18,9 +18,9 @@ The system reads structured **Excel input files** containing faculty, course, L-
 
 ---
 
-## ⭐ Key Features
+##  Key Features
 
-### 🔹 Academic Timetables
+###  Academic Timetables
 - Fully automated timetable generation.
 - Strict conflict checking:
   - Faculty availability
@@ -30,29 +30,29 @@ The system reads structured **Excel input files** containing faculty, course, L-
 - Balances workload across faculty.
 - Generates **color-coded Excel timetables** with merged cells.
 
-### 🔹 Exam Scheduling
+###  Exam Scheduling
 - Auto-generated exam schedule for first and second half semesters.
 - Ensures no clashes across departments and years.
 - Balanced subject distribution across exam days.
 
-### 🔹 Invigilator Allocation
+###  Invigilator Allocation
 - Automatic fair distribution of invigilation duties.
 - No faculty overload.
 - Priority-based allocation logic.
 
-### 🔹 Seating Arrangement Automation
+###  Seating Arrangement Automation
 - Room-capacity based seat allocation.
 - Mixed-branch and mixed-year seating support.
 - Day-wise Excel output for all exam phases.
 
-### 🔹 Testing & Validation
+###  Testing & Validation
 - Dedicated `tests/` module.
 - Validates helper functions and scheduling logic.
 - Includes sample inputs and documented test cases.
 
 ---
 
-## 📂 Repository Structure
+##  Repository Structure
 
 ```
 timetable-scheduler/
@@ -94,7 +94,7 @@ timetable-scheduler/
 
 ---
 
-## 🛠️ Tech Stack
+##  Tech Stack
 
 - **Language**: Python 3
 - **Libraries**:
@@ -106,7 +106,7 @@ timetable-scheduler/
 
 ---
 
-## ⚙️ Installation
+##  Installation
 
 ### 1. Clone the repository
 ```bash
@@ -121,9 +121,9 @@ pip install -r requirements.txt
 
 ---
 
-## ▶️ Usage
+##  Usage
 
-### 🔸 Generate Academic Timetables
+###  Generate Academic Timetables
 ```bash
 python main.py
 ```
@@ -132,7 +132,7 @@ Outputs stored in:
 TT_Output/
 ```
 
-### 🔸 Generate Exam Timetable, Invigilators & Seating
+###  Generate Exam Timetable, Invigilators & Seating
 ```bash
 python exam.py
 ```
@@ -143,7 +143,7 @@ EXAM_OUTPUT/
 
 ---
 
-## 📄 Input File Requirements
+##  Input File Requirements
 
 Place all `.xlsx` files inside the `data/` folder.
 
@@ -159,7 +159,7 @@ All sheets must follow the exact format of provided sample files.
 
 ---
 
-## 🧪 Testing
+##  Testing
 
 Test resources are under:
 ```
@@ -176,7 +176,7 @@ Run tests manually or integrate into future CI workflows.
 
 ---
 
-## 📘 Documentation
+##  Documentation
 
 Full **Detailed Project Report (DPR)** is available in:
 ```
@@ -192,7 +192,7 @@ Includes:
 
 ---
 
-## 👥 Team
+##  Team
 
 | Name                | Roll Number |
 |---------------------|-------------|
@@ -205,7 +205,7 @@ Includes:
 
 ---
 
-## 🚧 Next Steps
+##  Next Steps
 
 - Automate room allotment for regular academic timetables.
 - Improve elective and tutorial slot mapping.
@@ -217,13 +217,13 @@ Includes:
 
 ---
 
-## 📜 License
+##  License
 
 This project is intended for academic timetable automation.  
 Feel free to modify and extend for institutional needs.
 
 ---
 
-## 🎯 Summary
+##  Summary
 
 This system automates the complete timetable and exam scheduling workflow — from lecture scheduling to invigilation and seating. It replaces hours of manual work with a fully consistent, conflict-free scheduler.
