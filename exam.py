@@ -1,4 +1,4 @@
-# seating_scheduler_final_seating_first.py
+# seating_scheduler_final_seating_sessions.py
 import os
 import math
 import random
@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
-from openpyxl.styles import Alignment, Font, Border, Side
+from openpyxl.styles import Alignment, Font, Border, Side, PatternFill
 
 random.seed(42)
 
@@ -24,14 +24,7 @@ def safe_int(v):
     except:
         return 0
 
-def prompt_nonempty(prompt_text):
-    v = input(prompt_text).strip()
-    while not v:
-        v = input(prompt_text).strip()
-    return v
-
 def base_slotname(slot_name):
-    """Extract base slot name: remove division suffixes and elective _Y suffix."""
     s = str(slot_name).strip().upper()
     if "_Y" in s:
         return s.split("_Y")[0]
@@ -39,48 +32,49 @@ def base_slotname(slot_name):
         return s.split("_")[0]
     return s
 
+def inv_key(num, name):
+    return f"{num}|{name}"
+
+def inv_display_from_key(key):
+    try:
+        num, name = key.split("|", 1)
+        return f"{num} - {name}"
+    except:
+        return str(key)
+
 # -------------------------
-# Inputs
+# Hardcoded inputs (as requested)
 # -------------------------
-def get_user_inputs():
-    print("=== Exam Scheduler Inputs ===")
-    num_years = int(prompt_nonempty("Number of academic years: "))
-    divisions = {}
-    for y in range(1, num_years + 1):
-        num_divs = int(prompt_nonempty(f"Year {y}, number of divisions: "))
-        divisions[y] = {}
-        for d in range(1, num_divs + 1):
-            sn = prompt_nonempty(f"  Short name for Division {d}: ").upper()
-            path = prompt_nonempty(f"     Path to Excel/CSV for {sn}: ")
-            if not os.path.exists(path):
-                raise FileNotFoundError(f"File not found: {path}")
-            divisions[y][sn] = path
+divisions = {
+    1: {"1CSEA": r"project\1CSEA.xlsx",
+        "1CSEB": r"project\1CSEB.xlsx",
+        "1DSAI": r"project\1DSAI.xlsx",
+        "1ECE": r"project\1ECE.xlsx"},
+    2: {"2CSEA": r"project\2CSEA.xlsx",
+        "2CSEB": r"project\2CSEB.xlsx",
+        "2DSAI": r"project\2DSAI.xlsx",
+        "2ECE": r"project\2ECE.xlsx"},
+    3: {"3CSEA": r"project\3CSEA.xlsx",
+        "3CSEB": r"project\3CSEB.xlsx",
+        "3DSAI": r"project\3DSAI.xlsx",
+        "3ECE": r"project\3ECE.xlsx"},
+    4: {"4CSEA": r"project\4CSEA.xlsx",
+        "4CSEB": r"project\4CSEB.xlsx",
+        "4DSAI": r"project\4DSAI.xlsx",
+        "4ECE": r"project\4ECE.xlsx"}
+}
 
-    rooms_path = prompt_nonempty("\nPath to rooms Excel (Room, Seating Capacity): ")
-    if not os.path.exists(rooms_path):
-        raise FileNotFoundError(rooms_path)
-
-    invig_path = prompt_nonempty("Path to faculty/assistants Excel: ")
-    if not os.path.exists(invig_path):
-        raise FileNotFoundError(invig_path)
-
-    num_days = int(prompt_nonempty("\nNumber of exam days: "))
-    sessions_per_day = []
-    for i in range(num_days):
-        sess_type = prompt_nonempty(f"  Day {i+1}, session(s)? Enter FN, AN, or B: ").upper()
-        if sess_type not in ("FN", "AN", "B"):
-            raise ValueError("Enter FN, AN, or B")
-        sessions_per_day.append({"FN": sess_type in ("FN", "B"), "AN": sess_type in ("AN", "B")})
-
-    return divisions, rooms_path, invig_path, num_days, sessions_per_day, num_years
+rooms_path = r"project\Rooms.xlsx"
+invig_path = r"project\invigilators_list.xlsx"
+num_years = 4
 
 # -------------------------
 # Load courses
 # -------------------------
-def load_courses(divisions, num_years):
+def load_courses(divisions_dict):
     rows = []
-    for year in range(1, num_years + 1):
-        for div, path in divisions[year].items():
+    for year, divs in divisions_dict.items():
+        for div, path in divs.items():
             df = pd.read_excel(path, engine="openpyxl")
             df.columns = [str(c).strip() for c in df.columns]
             for _, r in df.iterrows():
@@ -127,25 +121,9 @@ def split_half(df):
     return first, second
 
 # -------------------------
-# Seating-driven allocation to sessions
+# Allocate slots by seating capacity
 # -------------------------
-def allocate_slots_by_seating_capacity(courses_df, num_days, sessions_per_day, rooms_df):
-    """
-    Greedy algorithm:
-    - Build unique slots (keyed by SLOT)
-      * merged_flag True -> students = max(NO_OF_STUDENTS)
-      * merged_flag False -> students = sum(NO_OF_STUDENTS)
-      * also keep divisions set for clash prevention
-    - Iterate sessions in chronological order (day1 FN, day1 AN, day2 FN, ...)
-    - For each session compute total usable seats (sum rooms // 2)
-    - For each unassigned slot (in some deterministic order), if:
-        - slot.students <= total_usable_seats_remaining AND
-        - none of slot.divisions already have an assignment in this (day,session)
-      then assign whole slot to this session (do not partially seat).
-    - Otherwise defer slot to later session.
-    - Continue until all slots are assigned or sessions exhausted (remaining slots will remain unassigned — you can inspect them).
-    """
-    # Build slots
+def allocate_slots_by_seating_capacity(courses_df, rooms_df):
     slot_map = {}
     for _, r in courses_df.iterrows():
         key = r["SLOT"]
@@ -153,7 +131,6 @@ def allocate_slots_by_seating_capacity(courses_df, num_days, sessions_per_day, r
             slot_map[key] = {"slot_key": key, "slot_raw": r.get("SLOT_RAW", key), "courses": [], "divisions": set(), "merged_flag": False}
         slot_map[key]["courses"].append(r)
         slot_map[key]["divisions"].add(r["DIVISION"])
-        # detect merge: if MERGE length > 1 then it's merged
         if isinstance(r["MERGE"], (list, tuple)) and len(r["MERGE"]) > 1:
             slot_map[key]["merged_flag"] = True
 
@@ -173,76 +150,52 @@ def allocate_slots_by_seating_capacity(courses_df, num_days, sessions_per_day, r
             "assigned": False
         })
 
-    # Pre-compute total usable seats per session (same for all sessions unless room list changes)
-    total_usable_all_rooms = int(sum(rooms_df["Seating Capacity"] // 2))
+    total_students = sum(s["students"] for s in slots)
+    rooms_sorted = rooms_df.sort_values(by="Seating Capacity", ascending=False)
+    room_caps = [int(r["Seating Capacity"]) for _, r in rooms_sorted.iterrows()]
+    session_capacity = sum([cap // 2 for cap in room_caps])
+    min_days = math.ceil(total_students / session_capacity) if session_capacity > 0 else 1
+    sessions_per_day = [{"FN": True, "AN": True} for _ in range(min_days)]
+    last_day_total = total_students - session_capacity*(min_days-1)
+    if last_day_total <= max(room_caps)//2:
+        sessions_per_day[-1] = {"FN": True, "AN": False}
 
-    # Prepare assignments list
-    assignments = []  # list of dicts: {"day":d, "session":sess, "slots":[slot_objs]}
-
-    # track division assignments to prevent clashes: division_taken[(day,session)][division]=True
+    assignments = []
     division_taken = defaultdict(lambda: defaultdict(bool))
-
-    # iterate sessions chronologically
-    slot_order = sorted(slots, key=lambda x: (x["slot_key"]))  # deterministic order; you can tweak priority here
-
-    # For each day/session we will try to pack full slots (whole)
+    slot_order = sorted(slots, key=lambda x: x["slot_key"])
     day_idx = 1
-    for day_i in range(num_days):
+    for day_i in range(min_days):
         for sess in ("FN", "AN"):
             if not sessions_per_day[day_i][sess]:
                 continue
-            remaining_capacity = total_usable_all_rooms
+            remaining_capacity = session_capacity
             placed_slots = []
-            # iterate through unassigned slots and try to place them whole
             for slot in slot_order:
                 if slot["assigned"]:
                     continue
-                # skip if students greater than total capacity (cannot be placed in any session) — leave unassigned
-                if slot["students"] > total_usable_all_rooms:
-                    # cannot place in any session; skip (will remain unassigned)
+                if slot["students"] > session_capacity:
                     continue
-                # check division conflicts for this (day,session)
-                conflict = False
-                for div in slot["divisions"]:
-                    if division_taken[(day_idx, sess)].get(div, False):
-                        conflict = True
-                        break
+                conflict = any(division_taken[(day_idx, sess)].get(div, False) for div in slot["divisions"])
                 if conflict:
                     continue
-                # check if it fits in remaining capacity of this session
                 if slot["students"] <= remaining_capacity:
-                    # assign
                     placed_slots.append(slot)
                     remaining_capacity -= slot["students"]
                     slot["assigned"] = True
                     for div in slot["divisions"]:
                         division_taken[(day_idx, sess)][div] = True
-                # if not fit, skip and try next slot (we don't partially place)
+            # append even if placed_slots empty to preserve day/session structure? original code appended regardless.
             assignments.append({"day": day_idx, "session": sess, "slots": placed_slots})
         day_idx += 1
-
-    # Collect unassigned slots (students >0 and not assigned)
-    unassigned = [s for s in slot_order if not s["assigned"]]
-
-    return assignments, unassigned
+    return assignments
 
 # -------------------------
-# Seating: create grids per room and seat assigned slots only (non-partial)
-# (re-using earlier seating logic)
+# Seating allocation per session
 # -------------------------
 def make_grid(rows, cols):
     return [["" for _ in range(cols)] for __ in range(rows)]
 
-def allocate_seating_for_session(placed_slots, rooms_df, invigilators):
-    """
-    identical seating algorithm as before:
-    - Build per-item list (merged -> single item; non-merged -> per-division items)
-    - For each room: grid with rows=6 and cols=ceil(cap/6), usable seats = cap//2
-    - Fill SLOT columns with blanks between; ensure consecutive SLOT columns have different base slotname
-    - If only one remaining item and its base equals last placed base -> stop filling that room early and continue next room
-    - Finally fallback-fill remaining seats ignoring base constraint
-    """
-    # Build parent groups and per-division items
+def allocate_seating_for_session(placed_slots, rooms_df, invigators):
     parent_groups = {}
     for slot in placed_slots:
         parent = slot["slot_key"]
@@ -257,29 +210,39 @@ def allocate_seating_for_session(placed_slots, rooms_df, invigilators):
                 items.append({"label_prefix": f"{parent}_{div}", "remaining": int(rr["NO_STUDENTS"])})
         parent_groups[parent] = {"base": base, "items": items}
 
-    # active items flatten
     active_items = []
     for parent, v in parent_groups.items():
         for it in v["items"]:
             active_items.append({"parent": parent, "base": v["base"], "label_prefix": it["label_prefix"], "remaining": it["remaining"]})
 
+    rooms_sorted = rooms_df.sort_values(by="Seating Capacity", ascending=False)
+    largest_room_cap = rooms_sorted["Seating Capacity"].max() if not rooms_sorted.empty else 0
+
     rooms = []
-    for _, r in rooms_df.iterrows():
+    inv_pool = invigators.copy() if invigators else []
+    for _, r in rooms_sorted.iterrows():
         cap = int(r["Seating Capacity"])
         rows = 6
         cols = max(1, math.ceil(cap / rows))
+        usable = cap // 2
+
+        invs_needed = 2 if cap == largest_room_cap else 1
+        alloc_invs = []
+        if inv_pool and invs_needed > 0:
+            take = min(invs_needed, len(inv_pool))
+            for _ in range(take):
+                alloc_invs.append(inv_pool.pop(0))
         rooms.append({
             "name": str(r["Room"]),
+            "capacity": cap,
             "rows": rows,
             "cols": cols,
-            "usable": cap // 2,
+            "usable": usable,
             "grid": make_grid(rows, cols),
-            "invigilators": random.sample(invigilators, min(2, max(1, len(invigilators))))
+            "invigilators": alloc_invs
         })
 
     placed_counters = defaultdict(int)
-
-    # Fill rooms one by one strictly (no partial slot placement across a session)
     for room in rooms:
         if not any(it["remaining"] > 0 for it in active_items):
             break
@@ -289,10 +252,7 @@ def allocate_seating_for_session(placed_slots, rooms_df, invigilators):
         placed_in_room = 0
         col_idx = 0
         last_slot_base = None
-
-        # place while capacity and columns available
         while placed_in_room < usable and any(it["remaining"] > 0 for it in active_items) and col_idx < cols:
-            # pick next item with remaining and base != last_slot_base
             chosen_idx = None
             for idx, it in enumerate(active_items):
                 if it["remaining"] <= 0:
@@ -301,20 +261,13 @@ def allocate_seating_for_session(placed_slots, rooms_df, invigilators):
                     chosen_idx = idx
                     break
             if chosen_idx is None:
-                # if only one item left and its base==last_slot_base -> stop this room (defer to next room)
-                remaining_nonzero = [it for it in active_items if it["remaining"] > 0]
-                if len(remaining_nonzero) <= 1:
-                    break
-                # else relax and pick any remaining
                 for idx, it in enumerate(active_items):
                     if it["remaining"] > 0:
                         chosen_idx = idx
                         break
                 if chosen_idx is None:
                     break
-
             chosen = active_items[chosen_idx]
-            # place a full column (up to rows or remaining)
             for r_in in range(rows):
                 if placed_in_room >= usable:
                     break
@@ -328,14 +281,8 @@ def allocate_seating_for_session(placed_slots, rooms_df, invigilators):
                 placed_in_room += 1
             last_slot_base = chosen["base"]
             col_idx += 1
-            # add blank column if space and not full
-            if placed_in_room < usable and col_idx < cols:
-                for r_in in range(rows):
-                    room["grid"][r_in][col_idx] = ""
-                col_idx += 1
-        # end while for this room
 
-    # Fallback fill remaining seats ignoring base constraint
+    # Fallback fill for leftover
     for room in rooms:
         rows = room["rows"]
         cols = room["cols"]
@@ -349,7 +296,6 @@ def allocate_seating_for_session(placed_slots, rooms_df, invigilators):
                     break
                 if room["grid"][r_in][c]:
                     continue
-                found = False
                 for it in active_items:
                     if it["remaining"] > 0:
                         placed_counters[it["label_prefix"]] += 1
@@ -357,21 +303,59 @@ def allocate_seating_for_session(placed_slots, rooms_df, invigilators):
                         room["grid"][r_in][c] = f"{it['label_prefix']}-{labnum}"
                         it["remaining"] -= 1
                         already += 1
-                        found = True
                         break
-                if not found:
-                    break
-            if already >= usable:
-                break
+
+    # ------------------------------------------------------------
+    # REDISTRIBUTE INVIGILATORS — DESCENDING CAPACITY LOGIC
+    # ------------------------------------------------------------
+    rooms_with_students = []
+    rooms_empty = []
+
+    for room in rooms:
+        occupied = any(room["grid"][r][c] for r in range(room["rows"]) for c in range(room["cols"]))
+        if occupied:
+            rooms_with_students.append(room)
+        else:
+            rooms_empty.append(room)
+
+    free_invigs = []
+    for room in rooms_empty:
+        free_invigs.extend(room["invigilators"])
+        room["invigilators"] = []
+
+    free_invigs.extend(inv_pool)
+
+    for room in rooms_with_students:
+        if len(room["invigilators"]) > 2:
+            extra = room["invigilators"][2:]
+            free_invigs.extend(extra)
+            room["invigilators"] = room["invigilators"][:2]
+
+    for room in rooms_with_students:
+        if len(room["invigilators"]) == 0 and free_invigs:
+            room["invigilators"].append(free_invigs.pop(0))
+
+    rooms_sorted_cap_desc = sorted(rooms_with_students, key=lambda x: x["capacity"], reverse=True)
+
+    for room in rooms_sorted_cap_desc:
+        if not free_invigs:
+            break
+        if len(room["invigilators"]) == 1:
+            room["invigilators"].append(free_invigs.pop(0))
+
+    for room in rooms_sorted_cap_desc:
+        if not free_invigs:
+            break
+        if len(room["invigilators"]) < 2:
+            room["invigilators"].append(free_invigs.pop(0))
 
     return rooms
 
 # -------------------------
-# Write seating Excel
+# Write seating Excel (per-day) - will be called for each half saving into given out_dir
 # -------------------------
-def write_seating_excel(day_idx, placed_slots, rooms_df, invigilators):
-    rooms_alloc = allocate_seating_for_session(placed_slots, rooms_df, invigilators)
-    out_dir = Path("output/seating_arrangements")
+def write_seating_excel(day_idx, rooms_alloc_fn, rooms_alloc_an, day_slots_fn, day_slots_an, df_courses, out_dir):
+    out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     outpath = out_dir / f"Day_{day_idx}.xlsx"
     wb = Workbook()
@@ -381,12 +365,13 @@ def write_seating_excel(day_idx, placed_slots, rooms_df, invigilators):
     thin = Side(border_style="thin", color="000000")
     border = Border(top=thin, left=thin, right=thin, bottom=thin)
 
-    for sess in ("FN", "AN"):
+    for sess, rooms_alloc in [("FN", rooms_alloc_fn), ("AN", rooms_alloc_an)]:
         ws = wb.create_sheet(sess)
         row_cursor = 1
         for room in rooms_alloc:
             ws.cell(row=row_cursor, column=1, value=f"Room: {room['name']}")
-            ws.cell(row=row_cursor, column=3, value=f"Invigilators: {', '.join(room['invigilators'])}")
+            inv_display = ", ".join([inv_display_from_key(k) for k in room.get('invigilators', [])])
+            ws.cell(row=row_cursor, column=3, value=f"Invigilators: {inv_display}")
             row_cursor += 1
             for r in range(room["rows"]):
                 for c in range(room["cols"]):
@@ -395,16 +380,70 @@ def write_seating_excel(day_idx, placed_slots, rooms_df, invigilators):
                     cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
                     cell.border = border
             row_cursor += room["rows"] + 2
-        # column widths
         max_cols = max((room["cols"] for room in rooms_alloc), default=1)
         for c in range(1, max_cols + 1):
             ws.column_dimensions[get_column_letter(c)].width = 18
+
+    # -------------------------
+    # REFERENCE sheet
+    # -------------------------
+    ws_ref = wb.create_sheet("REFERENCE")
+    headers = ["ELECTIVE OR NOT", "FULLSEM OR HALFSEM", "SLOT NAME", "COURSE CODE", "COURSE TITLE", "DIVISION", "SESSION"]
+    ws_ref.append(headers)
+
+    session_map = {}
+    for s in day_slots_fn:
+        session_map[s["slot_key"]] = "FN"
+    for s in day_slots_an:
+        session_map[s["slot_key"]] = "AN"
+
+    day_slot_keys = set(session_map.keys())
+    if day_slot_keys:
+        df_day = df_courses[df_courses["SLOT"].isin(day_slot_keys)].copy()
+    else:
+        df_day = df_courses.iloc[0:0].copy()
+
+    color_palette = [
+        "FFCCCC", "CCFFCC", "CCCCFF", "FFF2CC", "FFD9E6", "E6FFCC", "CCE5FF", "E6CCFF",
+        "FFE5CC", "CCFFF2", "F0E68C", "E0FFFF"
+    ]
+    divisions_list = sorted(df_day["DIVISION"].unique()) if not df_day.empty else []
+    div_color_map = {div: color_palette[i % len(color_palette)] for i, div in enumerate(divisions_list)}
+
+    for _, r in df_day.iterrows():
+        session = session_map.get(r["SLOT"], "")
+        row_vals = [
+            r.get("ELECTIVE", ""),
+            r.get("FULLSEM_TYPE", ""),
+            r.get("SLOT_RAW", ""),
+            r.get("COURSE_CODE", ""),
+            r.get("COURSE_TITLE", ""),
+            r.get("DIVISION", ""),
+            session
+        ]
+        ws_ref.append(row_vals)
+        row_idx = ws_ref.max_row
+        fill_color = div_color_map.get(r.get("DIVISION", ""), color_palette[0])
+        fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+        for col_idx in range(1, len(headers) + 1):
+            ws_ref.cell(row=row_idx, column=col_idx).fill = fill
+
+    for col in ws_ref.columns:
+        first = col[0]
+        try:
+            ws_ref.column_dimensions[first.column_letter].width = 25
+        except Exception:
+            pass
+        for cell in col:
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            if cell.row == 1:
+                cell.font = Font(bold=True)
 
     wb.save(outpath)
     print(f"Wrote seating for Day {day_idx}: {outpath}")
 
 # -------------------------
-# Timetable builder (from assignments)
+# Timetable builder (per-half)
 # -------------------------
 def build_timetable_from_assignments(df_courses, assignments, outpath):
     wb = Workbook()
@@ -418,11 +457,30 @@ def build_timetable_from_assignments(df_courses, assignments, outpath):
                 continue
             names = [s["slot_key"] for s in alloc["slots"]]
             ws.append([alloc["day"], ", ".join(names)])
-    ws_ref = wb.create_sheet("Reference Table")
-    ws_ref.append(["ELECTIVE OR NOT", "FULLSEM OR HALFSEM", "SLOT NAME", "COURSE CODE", "COURSE TITLE", "DIVISION"])
-    ref_df = df_courses[["ELECTIVE", "FULLSEM_TYPE", "SLOT", "COURSE_CODE", "COURSE_TITLE", "DIVISION"]].drop_duplicates()
-    for _, r in ref_df.iterrows():
-        ws_ref.append([r["ELECTIVE"], r["FULLSEM_TYPE"], r["SLOT"], r["COURSE_CODE"], r["COURSE_TITLE"], r["DIVISION"]])
+    color_palette = [
+        "FFCCCC", "CCFFCC", "CCCCFF", "FFF2CC", "FFD9E6", "E6FFCC", "CCE5FF", "E6CCFF",
+        "FFE5CC", "CCFFF2", "F0E68C", "E0FFFF"
+    ]
+    for year in sorted(df_courses["YEAR"].unique()):
+        ws_ref = wb.create_sheet(f"Reference_{year}")
+        headers = ["YEAR", "DIVISION", "ELECTIVE", "FULLSEM/HALFSEM", "SLOT NAME", "COURSE CODE", "COURSE TITLE"]
+        ws_ref.append(headers)
+        ref_df = df_courses[df_courses["YEAR"] == year][
+            ["YEAR", "DIVISION", "ELECTIVE", "FULLSEM_TYPE", "SLOT", "COURSE_CODE", "COURSE_TITLE"]
+        ].drop_duplicates()
+        divisions_list = sorted(ref_df["DIVISION"].unique())
+        div_color_map = {div: color_palette[i % len(color_palette)] for i, div in enumerate(divisions_list)}
+        for _, r in ref_df.iterrows():
+            row_vals = [
+                r["YEAR"], r["DIVISION"], r["ELECTIVE"],
+                r["FULLSEM_TYPE"], r["SLOT"], r["COURSE_CODE"], r["COURSE_TITLE"]
+            ]
+            ws_ref.append(row_vals)
+            row_idx = ws_ref.max_row
+            fill_color = div_color_map.get(r["DIVISION"], color_palette[0])
+            fill = PatternFill(start_color=fill_color, end_color=fill_color, fill_type="solid")
+            for col_idx in range(1, len(headers) + 1):
+                ws_ref.cell(row=row_idx, column=col_idx).fill = fill
     for sh in wb.sheetnames:
         ws = wb[sh]
         for col in ws.columns:
@@ -440,54 +498,173 @@ def build_timetable_from_assignments(df_courses, assignments, outpath):
     print(f"Wrote timetable: {outpath}")
 
 # -------------------------
+# Build invigilator schedules workbook (per-half)
+# -------------------------
+def write_invigilator_schedules(invigilator_df, invig_assignments, outpath):
+    out_dir = Path(outpath).parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+    wb = Workbook()
+    if "Sheet" in wb.sheetnames:
+        del wb["Sheet"]
+
+    # Sheet1: copy of provided list
+    ws_list = wb.create_sheet("Invigilators_List")
+    for c_idx, col in enumerate(invigilator_df.columns.tolist(), start=1):
+        ws_list.cell(row=1, column=c_idx, value=col)
+    for r_idx, row in invigilator_df.reset_index(drop=True).iterrows():
+        for c_idx, col in enumerate(invigilator_df.columns.tolist(), start=1):
+            val = row[col]
+            try:
+                if c_idx == 1:
+                    val_int = int(float(val))
+                    ws_list.cell(row=r_idx+2, column=c_idx, value=val_int)
+                else:
+                    ws_list.cell(row=r_idx+2, column=c_idx, value=val)
+            except Exception:
+                ws_list.cell(row=r_idx+2, column=c_idx, value=val)
+
+    # Per-invigilator sheets
+    for _, row in invigilator_df.iterrows():
+        num = str(row.iloc[0]).strip()
+        name = str(row.iloc[1]).strip() if len(row) > 1 else ""
+        sheet_name = f"INVIGILATOR_{num}".upper()[:31]
+        ws = wb.create_sheet(sheet_name)
+        ws.append(["Day", "Session", "Room"])
+        key = inv_key(num, name)
+        duties = invig_assignments.get(key, [])
+        duties_sorted = sorted(duties, key=lambda x: (x["day"], 0 if x["session"] == "FN" else 1))
+        for d in duties_sorted:
+            ws.append([d["day"], d["session"], d["room"]])
+        for col in ws.columns:
+            first = col[0]
+            try:
+                ws.column_dimensions[first.column_letter].width = 18
+            except Exception:
+                pass
+            for cell in col:
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                if cell.row == 1:
+                    cell.font = Font(bold=True)
+
+    wb.save(outpath)
+    print(f"Wrote invigilator schedules: {outpath}")
+
+# -------------------------
+# Run full generation for a half (keeps algorithm exactly as original)
+# -------------------------
+def run_half(half_name, courses_df_half, rooms_df, inv_copy_df):
+    """
+    half_name: "FIRSTHALF" or "SECONDHALF"
+    courses_df_half: DataFrame of courses for that half only
+    rooms_df: rooms DataFrame
+    inv_copy_df: DataFrame (first two columns) from invigilators input
+    """
+    root_out = Path("EXAM_OUTPUT") / half_name
+    seating_out_dir = root_out / "seating_arrangements"
+    Path(seating_out_dir).mkdir(parents=True, exist_ok=True)
+
+    # Build invigilator list (preserve order, unique)
+    invig_list = []
+    invig_seen = set()
+    for _, r in inv_copy_df.iterrows():
+        num = str(r.iloc[0]).strip()
+        name = str(r.iloc[1]).strip() if len(r) > 1 else ""
+        if not num:
+            continue
+        key = inv_key(num, name)
+        if key in invig_seen:
+            continue
+        invig_seen.add(key)
+        invig_list.append(key)
+
+    # 1) Slot allocation -> assignments for this half
+    assignments = allocate_slots_by_seating_capacity(courses_df_half.copy(), rooms_df)
+
+    # 2) Build timetable file for this half
+    timetable_path = root_out / f"{half_name.lower()}_timetable.xlsx"
+    build_timetable_from_assignments(courses_df_half, assignments, str(timetable_path))
+
+    # 3) Prepare invigilator assignment mapping for this half
+    invig_assignments = defaultdict(list)
+
+    # Calculate total days for this half only (some assign entries may have empty slots)
+    total_days = max([alloc["day"] for alloc in assignments]) if assignments else 0
+
+    for day_idx in range(1, total_days + 1):
+        # Random split invigilators each day (same logic as original: random shuffle, half/half, extra to AN)
+        invig_random = invig_list.copy()
+        random.shuffle(invig_random)
+        half_invig = len(invig_random) // 2
+        invig_fn = invig_random[:half_invig]
+        invig_an = invig_random[half_invig:]
+
+        # Extract slots for this half/day/session explicitly from assignments (this half's assignments)
+        day_slots_fn = [s for alloc in assignments if alloc["day"] == day_idx and alloc["session"] == "FN" for s in alloc["slots"]]
+        day_slots_an = [s for alloc in assignments if alloc["day"] == day_idx and alloc["session"] == "AN" for s in alloc["slots"]]
+
+        # Allocate seating and invigilators for FN and AN
+        rooms_alloc_fn = allocate_seating_for_session(day_slots_fn, rooms_df, invig_fn)
+        rooms_alloc_an = allocate_seating_for_session(day_slots_an, rooms_df, invig_an)
+
+        # Record invigilator duties
+        for room in rooms_alloc_fn:
+            for ik in room.get("invigilators", []):
+                invig_assignments[ik].append({"day": day_idx, "session": "FN", "room": room["name"]})
+        for room in rooms_alloc_an:
+            for ik in room.get("invigilators", []):
+                invig_assignments[ik].append({"day": day_idx, "session": "AN", "room": room["name"]})
+
+        # Write per-day seating file into this half's folder
+        write_seating_excel(day_idx, rooms_alloc_fn, rooms_alloc_an, day_slots_fn, day_slots_an, courses_df_half, seating_out_dir)
+
+    # After all days, write invigilator schedules into this half folder
+    inv_sched_path = root_out / "Invigilator_Schedules.xlsx"
+    write_invigilator_schedules(inv_copy_df, invig_assignments, str(inv_sched_path))
+
+    print(f"Completed generation for {half_name}. Outputs in: {root_out}")
+
+# -------------------------
 # Main
 # -------------------------
-if __name__ == "__main__":
-    divisions, rooms_path, invig_path, num_days, sessions_per_day, num_years = get_user_inputs()
-    df_courses = load_courses(divisions, num_years)
+def main():
+    # Load master courses from hardcoded divisions
+    df_courses = load_courses(divisions)
     if df_courses.empty:
         print("No courses found. Exiting.")
-        raise SystemExit
+        return
 
-    first_half, second_half = split_half(df_courses)
+    first_half_df, second_half_df = split_half(df_courses)
 
+    # Load rooms and invigilators
     rooms_df = pd.read_excel(rooms_path, engine="openpyxl")
     rooms_df.columns = [str(c).strip() for c in rooms_df.columns]
     if "Room" not in rooms_df.columns or "Seating Capacity" not in rooms_df.columns:
         raise ValueError("Rooms file must contain 'Room' and 'Seating Capacity' columns")
 
-    inv_df = pd.read_excel(invig_path, engine="openpyxl", header=None)
-    invig_list = [str(x).strip() for x in inv_df.iloc[:,0] if str(x).strip()]
-
-    # Allocate slots by seating feasibility (first-half and second-half separately)
-    assignments_first, unassigned_first = allocate_slots_by_seating_capacity(first_half, num_days, sessions_per_day, rooms_df)
-    assignments_second, unassigned_second = allocate_slots_by_seating_capacity(second_half, num_days, sessions_per_day, rooms_df)
-
-    # Combine assignments by day/session (we have a list in chronological order)
-    # For building timetable files, we separate by half as you requested earlier
-    build_timetable_from_assignments(first_half, assignments_first, "output/firsthalf_timetable.xlsx")
-    build_timetable_from_assignments(second_half, assignments_second, "output/secondhalf_timetable.xlsx")
-
-    # Write seating workbooks day-wise: for each day collect slots assigned in both halves and seat them
-    # assignments_first/second contains entries with "day","session","slots"
-    Path("output").mkdir(exist_ok=True)
-    for day_idx in range(1, num_days + 1):
-        # collect slots assigned to this day across both halves and sessions
-        day_slots = []
-        for alloc in assignments_first + assignments_second:
-            if alloc["day"] == day_idx:
-                day_slots.extend(alloc["slots"])
-        if not day_slots:
-            continue
-        # seat them (function will create per-session sheets FN and AN but we pass full list)
-        write_seating_excel(day_idx, day_slots, rooms_df, invig_list)
-
-    # Output unassigned lists for your review
-    if unassigned_first or unassigned_second:
-        print("\nWARNING: Some slots could not be assigned in any session (too large or insufficient sessions).")
-        print("Unassigned (first half):", [s["slot_key"] for s in unassigned_first])
-        print("Unassigned (second half):", [s["slot_key"] for s in unassigned_second])
+    inv_df = pd.read_excel(invig_path, engine="openpyxl", dtype=str)
+    inv_df.columns = [str(c).strip() for c in inv_df.columns]
+    if inv_df.shape[1] < 1:
+        raise ValueError("Invigilator file must have at least one column (NUMBER). Preferably two: NUMBER and NAME.")
+    # Keep first two columns as provided
+    inv_copy_df = inv_df.iloc[:, :2].copy()
+    # Ensure column names are present (we don't force specific names)
+    if inv_copy_df.shape[1] == 1:
+        inv_copy_df.columns = [inv_copy_df.columns[0]]
     else:
-        print("\nAll slots assigned across given sessions/days.")
+        inv_copy_df.columns = [inv_copy_df.columns[0], inv_copy_df.columns[1]]
 
-    print("\nDone. Files written to ./output and ./output/seating_arrangements")
+    # Create EXAM_OUTPUT root
+    Path("EXAM_OUTPUT").mkdir(exist_ok=True)
+
+    # Run FIRSTHALF
+    print("\n=== Generating FIRSTHALF ===")
+    run_half("FIRSTHALF", first_half_df, rooms_df, inv_copy_df)
+
+    # Run SECONDHALF
+    print("\n=== Generating SECONDHALF ===")
+    run_half("SECONDHALF", second_half_df, rooms_df, inv_copy_df)
+
+    print("\nAll done. Check EXAM_OUTPUT/FIRSTHALF and EXAM_OUTPUT/SECONDHALF for results.")
+
+if __name__ == "__main__":
+    main()
