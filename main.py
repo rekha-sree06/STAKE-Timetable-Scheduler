@@ -1007,18 +1007,28 @@ def main():
     print("Minimum gap (faculty):", faculty_gap, "minutes")
     print("-" * 40)
 
-    n_years = int(input("Enter number of academic years: ").strip())
-    inputs_per_year = {}
-    for y in range(1, n_years + 1):
-        n_div = int(input(f"Year {y}, number of divisions: ").strip())
-        inputs_per_year[y] = {}
-        for d in range(1, n_div + 1):
-            full_div = input(f"  Short name for Division {d} (use exact name for MERGE, e.g. '1CSEA'): ").strip()
-            if not full_div:
-                full_div = input("    Division name cannot be blank — please enter short division name: ").strip()
-            path = input(f"     Path to Excel/CSV for {full_div}: ").strip()
-            inputs_per_year[y][full_div] = path
+    # Hardcoded academic years and their division input paths
+    inputs_per_year = {
+        1: {"1CSEA": r"data\1CSEA.xlsx",
+            "1CSEB": r"data\1CSEB.xlsx",
+            "1DSAI": r"data\1DSAI.xlsx",
+            "1ECE": r"data\1ECE.xlsx"},
+        2: {"2CSEA": r"data\2CSEA.xlsx",
+            "2CSEB": r"data\2CSEB.xlsx",
+            "2DSAI": r"data\2DSAI.xlsx",
+            "2ECE": r"data\2ECE.xlsx"},
+        3: {"3CSEA": r"data\3CSEA.xlsx",
+            "3CSEB": r"data\3CSEB.xlsx",
+            "3DSAI": r"data\3DSAI.xlsx",
+            "3ECE": r"data\3ECE.xlsx"},
+        4: {"4CSEA": r"data\4CSEA.xlsx",
+            "4CSEB": r"data\4CSEB.xlsx",
+            "4DSAI": r"data\4DSAI.xlsx",
+            "4ECE": r"data\4ECE.xlsx"}
+    }
 
+    n_years = 4
+    
     for y in range(1, n_years + 1):
         print(f"\nProcessing Year {y} ...")
         div_paths = inputs_per_year[y]

@@ -46,26 +46,26 @@ def inv_display_from_key(key):
 # Hardcoded inputs (as requested)
 # -------------------------
 divisions = {
-    1: {"1CSEA": r"project\1CSEA.xlsx",
-        "1CSEB": r"project\1CSEB.xlsx",
-        "1DSAI": r"project\1DSAI.xlsx",
-        "1ECE": r"project\1ECE.xlsx"},
-    2: {"2CSEA": r"project\2CSEA.xlsx",
-        "2CSEB": r"project\2CSEB.xlsx",
-        "2DSAI": r"project\2DSAI.xlsx",
-        "2ECE": r"project\2ECE.xlsx"},
-    3: {"3CSEA": r"project\3CSEA.xlsx",
-        "3CSEB": r"project\3CSEB.xlsx",
-        "3DSAI": r"project\3DSAI.xlsx",
-        "3ECE": r"project\3ECE.xlsx"},
-    4: {"4CSEA": r"project\4CSEA.xlsx",
-        "4CSEB": r"project\4CSEB.xlsx",
-        "4DSAI": r"project\4DSAI.xlsx",
-        "4ECE": r"project\4ECE.xlsx"}
+    1: {"1CSEA": r"data\1CSEA.xlsx",
+        "1CSEB": r"data\1CSEB.xlsx",
+        "1DSAI": r"data\1DSAI.xlsx",
+        "1ECE": r"data\1ECE.xlsx"},
+    2: {"2CSEA": r"data\2CSEA.xlsx",
+        "2CSEB": r"data\2CSEB.xlsx",
+        "2DSAI": r"data\2DSAI.xlsx",
+        "2ECE": r"data\2ECE.xlsx"},
+    3: {"3CSEA": r"data\3CSEA.xlsx",
+        "3CSEB": r"data\3CSEB.xlsx",
+        "3DSAI": r"data\3DSAI.xlsx",
+        "3ECE": r"data\3ECE.xlsx"},
+    4: {"4CSEA": r"data\4CSEA.xlsx",
+        "4CSEB": r"data\4CSEB.xlsx",
+        "4DSAI": r"data\4DSAI.xlsx",
+        "4ECE": r"data\4ECE.xlsx"}
 }
 
-rooms_path = r"project\Rooms.xlsx"
-invig_path = r"project\invigilators_list.xlsx"
+rooms_path = r"data\Rooms.xlsx"
+invig_path = r"data\invigilators_list.xlsx"
 num_years = 4
 
 # -------------------------
