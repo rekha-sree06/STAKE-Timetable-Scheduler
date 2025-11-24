@@ -106,7 +106,7 @@ This project uses:
 
 ---
 
-## 📦 Requirements
+##  Requirements
 
 Create a `requirements.txt` with the following (or run the command below):
 
@@ -118,7 +118,7 @@ Installation command:
 
 ---
 
-## ⚙️ settings.json (example)
+##  settings.json (example)
 
 Place `settings.json` at repo root to override defaults. Example content:
 
@@ -133,7 +133,7 @@ If `settings.json` is missing, `main.py` uses sensible defaults shown above.
 
 ---
 
-## ▶️ How to run — Timetable Generator (`main.py`)
+##  How to run — Timetable Generator (`main.py`)
 
 1. Ensure input division files (e.g., `1CSEA.xlsx`) are placed in `data/` or accessible paths.
 2. Run:
@@ -157,7 +157,7 @@ Each workbook contains:
 
 ---
 
-## ▶️ How to run — Exam Scheduler (`exam.py`)
+##  How to run — Exam Scheduler (`exam.py`)
 
 > Note: The exam script in your repo (`seating_scheduler_final_seating_sessions.py`) contains a hardcoded `divisions` dictionary using `project\...` paths. Either update those paths to point to `data\...` OR place files accordingly.
 
