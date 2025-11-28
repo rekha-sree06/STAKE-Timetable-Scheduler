@@ -4,7 +4,7 @@ Developed by **Team STAKE**
 
 ---
 
-##  Overview
+## Overview
 
 **STAKE-Timetable-Scheduler** is an end-to-end automation system that generates:
 
@@ -25,9 +25,9 @@ This project uses:
 
 ---
 
-##  Features
+## Features
 
-###  Timetable Generation (`main.py`)
+### Timetable Generation (`main.py`)
 - Reads division-wise files (e.g., 1CSEA.xlsx, 1CSEB.xlsx)  
 - Slot allocation based on L–T–P values (supports `L-T-P-S-C` or `L-T-P`)  
 - Ensures:
@@ -39,7 +39,7 @@ This project uses:
   - Faculty gap enforcement (configurable)  
 - Writes per-year, per-half Excel timetables
 
-###  Exam Scheduling (`exam.py` / `seating_scheduler_final_seating_sessions.py`)
+### Exam Scheduling (`exam.py` / `seating_scheduler_final_seating_sessions.py`)
 - Groups courses into exam slots
 - Allocates sessions (FN/AN) based on room capacities
 - Creates per-day seating grids per room (rows × columns)
@@ -107,20 +107,15 @@ This project uses:
 ---
 
 ##  Requirements
-
-Create a `requirements.txt` with the following (or run the command below):
-
-Installation command:
-
-    pip install pandas openpyxl
-
-(These are the only non-standard libraries required; others are from Python stdlib.)
+Only non-standard libraries required; others are from Python stdlib.  
+Install dependencies:
+pip install pandas openpyxl
 
 ---
 
 ##  settings.json (example)
 
-Place `settings.json` at repo root to override defaults. Example content:
+Place `settings.json` at repo root to override defaults:
 
     {
       "working_days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
@@ -143,8 +138,6 @@ If `settings.json` is missing, `main.py` uses sensible defaults shown above.
 3. Interactive prompts (you will be asked):
    - Minimum gap between consecutive slots in minutes (default 5)
    - Minimum faculty gap (default 180 minutes)
-   - Number of academic years
-   - For each year: number of divisions, division short-name and path to file
 
 4. Outputs:
    - `TT_Output/Year_<Y>/Timetable_Year<Y>_first_halfsem.xlsx`
@@ -159,13 +152,16 @@ Each workbook contains:
 
 ##  How to run — Exam Scheduler (`exam.py`)
 
-> Note: The exam script in your repo (`seating_scheduler_final_seating_sessions.py`) contains a hardcoded `divisions` dictionary using `project\...` paths. Either update those paths to point to `data\...` OR place files accordingly.
+> Note:The exam script (`seating_scheduler_final_seating_sessions.py`) contains a hardcoded `divisions` dictionary using `project\...` paths. Either update paths to point to `data\...` OR place files accordingly.
 
-1. Edit `seating_scheduler_final_seating_sessions.py` (top) to adjust file paths if required:
+1. Edit top of `seating_scheduler_final_seating_sessions.py`:
 
-    - `divisions = { ... }` (map years & division names to file paths)
-    - `rooms_path = r"data\Rooms.xlsx"`
-    - `invig_path = r"data\invigilators_list.xlsx"`
+        divisions = {
+        1: {"1CSEA": r"data\1CSEA.xlsx", ...},
+        ...
+        }
+        rooms_path = r"data\Rooms.xlsx"
+        invig_path = r"data\invigilators_list.xlsx"
 
 2. Run:
 
@@ -219,16 +215,17 @@ Columns required:
 - `Seating Capacity`
 
 ### Invigilators file (`invigilators_list.xlsx`)
-At least one column (`NUMBER`). Preferably two columns (`NUMBER`, `NAME`). Script uses first two columns.
+- `NUMBER`
+- `NAME` 
 
 ---
 
 ## Common issues & troubleshooting
 
-- **File not found**: Provide correct paths when `main.py` prompts or edit `divisions` dict in exam script.
-- **Slots unplaced**: Inspect `Unallotted Slots` sheet. Common causes: wrong L-T-P format, insufficient rooms, conflicting MERGE entries, or faculty availability constraints.
-- **Exam capacity insufficient**: Increase room list or change session capacity policy (the code currently uses `cap // 2` as usable seats per session).
-- **Invigilator distribution**: Current logic is best-effort; modify `allocate_seating_for_session()` if you need strict/load-balanced rules.
+- **File not found**: Correct paths or edit `divisions` dict
+- **Slots unplaced**: Inspect `Unallotted Slots` sheet
+- **Exam capacity insufficient**: Increase room list or session capacity
+- **Invigilator distribution**: Modify `allocate_seating_for_session()` for stricter rules
 
 ---
 
@@ -261,5 +258,3 @@ Developed by **Team STAKE**:
 Guided by: Dr. Vivekraj V K
 
 ---
-
-Which would you like next?
